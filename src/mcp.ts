@@ -9,7 +9,7 @@ import { renderParticle } from "./renderer.js";
 import { createTemplate, templateNames } from "./templates.js";
 import type { JsonObject, JsonPatchOperation, JsonValue } from "./types.js";
 import { validatePackage, validateParticle } from "./validator.js";
-import { authoringGuide, designBrief } from "./authoring-guide.js";
+import { authoringGuideFor, authoringTopics, designBrief } from "./authoring-guide.js";
 import { VideoAnalyzer } from "./video.js";
 
 function asObject(value: unknown, name: string): JsonObject {
@@ -133,9 +133,9 @@ async function createMcpServer(): Promise<McpServer> {
   }, async ({ file }) => jsonResult(await openDesktop(store, config, file)));
 
   server.registerTool("particle_authoring_guide", {
-    description: "Return the built-in Snowstorm and Blockbuster 1.12 authoring rules used by this MCP.",
-    inputSchema: z.object({}).default({})
-  }, async () => jsonResult({ guide: authoringGuide }));
+    description: "Return embedded Snowstorm and Blockbuster 1.12 authoring guidance. Request one topic to conserve context, or omit topic for the full guide.",
+    inputSchema: z.object({ topic: z.enum(authoringTopics).optional() }).default({})
+  }, async ({ topic }) => jsonResult({ topic: topic ?? "all", topics: authoringTopics, guide: authoringGuideFor(topic) }));
 
   server.registerTool("particle_design_brief", {
     description: "Convert an effect role into a compact Snowstorm/Blockbuster design brief, template recommendation, component direction and verification checklist.",
@@ -147,12 +147,17 @@ async function createMcpServer(): Promise<McpServer> {
   }, async ({ role, durationSeconds, attached }) => jsonResult(designBrief(role, durationSeconds, attached)));
 
   server.registerTool("video_list", {
-    description: "List reference videos in the configured referenceVideosRoot. Put a source video there before analysis.",
+    description: "List MCP-managed reference videos. Use video_import to copy a user-provided video into this directory before analysis.",
     inputSchema: z.object({}).default({})
   }, async () => jsonResult({ root: config.referenceVideosRoot, videos: await videos.list() }));
 
+  server.registerTool("video_import", {
+    description: "Copy an external video into the MCP-managed reference-video directory. Use the returned file value with video_analyze or video_extract_frames. Existing files are never overwritten.",
+    inputSchema: z.object({ sourcePath: z.string().min(1), name: z.string().min(1).optional() })
+  }, async ({ sourcePath, name }) => jsonResult(await videos.import(sourcePath, name)));
+
   server.registerTool("video_analyze", {
-    description: "Detect visual scene changes, sample a reference video, write JPEG frames plus a contact sheet and manifest with precise timecodes. Returns the contact sheet inline for vision-capable AI review.",
+    description: "Detect visual scene changes, sample a reference video, write JPEG frames plus a contact sheet and manifest with requested and decoded timecodes. Returns the contact sheet inline for vision-capable AI review.",
     inputSchema: z.object({
       file: z.string(),
       samples: z.number().int().min(4).max(24).default(12),

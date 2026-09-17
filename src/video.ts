@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { constants } from "node:fs";
 import path from "node:path";
 import { requireResolvedPathInside } from "./config.js";
 import type { ProjectConfig } from "./types.js";
@@ -95,6 +96,28 @@ export class VideoAnalyzer {
     };
     await walk(this.config.referenceVideosRoot);
     return output.sort();
+  }
+
+  async import(sourcePath: string, name?: string): Promise<{ file: string; path: string; bytes: number }> {
+    const requestedSource = path.resolve(sourcePath);
+    const source = await realpath(requestedSource);
+    const metadata = await stat(source);
+    if (!metadata.isFile()) throw new Error(`Video source is not a file: ${sourcePath}`);
+    if (!videoExtensions.has(path.extname(source).toLowerCase())) throw new Error(`Unsupported video extension: ${sourcePath}`);
+    if (metadata.size > 4 * 1024 * 1024 * 1024) throw new Error("Reference videos are limited to 4 GB. Trim the VFX sequence before importing.");
+    const extension = path.extname(source).toLowerCase();
+    const base = name ? slug(path.basename(name, path.extname(name))) : slug(path.basename(source, path.extname(source)));
+    for (let index = 0; index < 100; index += 1) {
+      const filename = `${base}${index ? `-${index + 1}` : ""}${extension}`;
+      const target = requireResolvedPathInside(this.config.referenceVideosRoot, filename);
+      try {
+        await copyFile(source, target, constants.COPYFILE_EXCL);
+        return { file: filename, path: target, bytes: metadata.size };
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
+    throw new Error("Could not allocate a unique filename for the imported video.");
   }
 
   async probe(file: string): Promise<VideoMetadata> {

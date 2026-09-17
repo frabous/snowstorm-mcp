@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import { constants, existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { ProjectConfig } from "./types.js";
@@ -43,6 +43,10 @@ export async function loadConfig(configPath?: string): Promise<ProjectConfig> {
     throw new Error(`Unable to load Snowstorm MCP configuration at ${resolvedConfigPath}: ${String(error)}`);
   }
 
+  const artifactsRoot = resolveValue(configDirectory, raw.artifactsRoot, "artifactsRoot");
+  const referenceVideosRoot = raw.referenceVideosRoot
+    ? path.resolve(configDirectory, raw.referenceVideosRoot)
+    : path.join(artifactsRoot, "reference-videos");
   const config: ProjectConfig = {
     configPath: resolvedConfigPath,
     projectName: raw.projectName ?? "snowstorm-project",
@@ -50,16 +54,17 @@ export async function loadConfig(configPath?: string): Promise<ProjectConfig> {
     resourcePackRoot: resolveValue(configDirectory, raw.resourcePackRoot, "resourcePackRoot"),
     selectorsFile: resolveValue(configDirectory, raw.selectorsFile, "selectorsFile"),
     spellFile: resolveValue(configDirectory, raw.spellFile, "spellFile"),
-    referenceVideosRoot: resolveValue(configDirectory, raw.referenceVideosRoot, "referenceVideosRoot"),
-    artifactsRoot: resolveValue(configDirectory, raw.artifactsRoot, "artifactsRoot")
+    referenceVideosRoot,
+    artifactsRoot
   };
+  await mkdir(config.artifactsRoot, { recursive: true });
+  await mkdir(config.referenceVideosRoot, { recursive: true });
 
   await Promise.all([
     requirePath(config.particlesRoot, "particlesRoot"),
     requirePath(config.resourcePackRoot, "resourcePackRoot"),
     requirePath(config.selectorsFile, "selectorsFile"),
-    requirePath(config.spellFile, "spellFile"),
-    requirePath(config.referenceVideosRoot, "referenceVideosRoot")
+    requirePath(config.spellFile, "spellFile")
   ]);
   return config;
 }

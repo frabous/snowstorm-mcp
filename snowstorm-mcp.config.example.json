@@ -4,6 +4,5 @@
   "resourcePackRoot": "../my-package/resourcepack",
   "selectorsFile": "../my-package/selectors.json",
   "spellFile": "../my-package/spell.yml",
-  "referenceVideosRoot": "../my-package/previews/reference",
   "artifactsRoot": "./.snowstorm-mcp/artifacts"
 }

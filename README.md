@@ -11,7 +11,7 @@ Snowstorm is used for simulation only. The server preserves `blockbuster:*` exte
 - Render Snowstorm previews as PNG, GIF or MP4.
 - Open a selected particle in a secure local Electron window.
 - Expose the built-in Blockbuster/Snowstorm authoring guide and effect design briefs to MCP clients.
-- Analyze source videos using FFmpeg scene detection.
+- Import source videos into an automatically managed folder, then analyze them with FFmpeg scene detection.
 - Generate JPEG contact sheets, a JSON manifest and individual frames named with millisecond timecodes.
 - Extract decoded frames at requested `HH:MM:SS.mmm` targets and report their decoded PTS for vision-capable AI review.
 
@@ -45,7 +45,6 @@ my-package/
   resourcepack/
   selectors.json
   spell.yml
-  previews/reference/
 ```
 
 ## OpenCode Configuration
@@ -77,24 +76,41 @@ Restart OpenCode after changing its configuration.
 5. Run `particle_verify_package` before merging selectors. Test spell helpers with the target package separately.
 6. Test the final effect in Minecraft. Snowstorm GIFs do not prove Blockbuster behavior.
 
-`particle_authoring_guide` provides the embedded Snowstorm/Blockbuster rules so the AI does not need a long external prompt for each effect.
+`particle_authoring_guide` embeds the Snowstorm/Blockbuster skill directly in the MCP. Request one of `workflow`, `components`, `blockbuster`, `motion`, `textures`, `magicspells`, `validation` or `reference-video` to minimize context; omit `topic` only when the AI needs the complete guide.
 
 ## Video Reference Workflow
 
-Put source videos in the configured `referenceVideosRoot`, for example:
+`referenceVideosRoot` is optional. When omitted, the MCP creates and manages:
 
 ```text
-previews/reference/megumin-reference.mp4
+.snowstorm-mcp/artifacts/reference-videos/
 ```
 
-Call `video_analyze` with the relative filename. The result contains:
+Give the AI the path to a source video. It calls `video_import`, which copies it into the managed directory without changing the original file. Then use the returned `file` value with `video_analyze`:
+
+```json
+{
+  "sourcePath": "D:\\references\\my-vfx-reference.mp4"
+}
+```
+
+The result includes `file`, for example `my-vfx-reference.mp4`. Call:
+
+```json
+{
+  "file": "my-vfx-reference.mp4",
+  "samples": 12
+}
+```
+
+`video_analyze` returns:
 
 - An inline JPEG contact sheet for an MCP client with vision support.
 - `contact-sheet.jpg` on disk.
 - `manifest.json` containing duration, resolution, detected scene times and every extracted frame path.
 - Frame names such as `frame-03-00-00-12.500.jpg`.
 
-For a closer VFX transition, call `video_extract_frames`:
+For a closer VFX transition, call `video_extract_frames`. It reports both the requested target and the actual decoded frame PTS, since frames only exist at real stream timestamps:
 
 ```json
 {
@@ -129,7 +145,8 @@ The `Save safely` control merges Snowstorm's output with the prior Blockbuster d
 | `particle_render` | Snowstorm PNG, GIF or MP4 preview. |
 | `particle_open_desktop` | Electron editor. |
 | `particle_authoring_guide` / `particle_design_brief` | Embedded Snowstorm authoring knowledge. |
-| `video_list` | Discover reference videos. |
+| `video_import` | Copy a user-provided video into the automatic managed directory. |
+| `video_list` | Discover imported reference videos. |
 | `video_analyze` | Scene-aware frames, contact sheet and manifest. |
 | `video_extract_frames` | Targeted timecode extraction with decoded PTS reporting. |
 
