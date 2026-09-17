@@ -1,0 +1,6 @@
+Snowstorm MCP bundles a local checkout of Snowstorm by JannisX11.
+
+Snowstorm is licensed under GPL-3.0-or-later:
+https://github.com/JannisX11/snowstorm/blob/master/LICENSE
+
+The Snowstorm source used by this project is pinned in vendor/snowstorm.

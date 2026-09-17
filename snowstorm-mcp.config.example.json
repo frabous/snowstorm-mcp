@@ -1,0 +1,9 @@
+{
+  "projectName": "my-vfx-package",
+  "particlesRoot": "../my-package/particles",
+  "resourcePackRoot": "../my-package/resourcepack",
+  "selectorsFile": "../my-package/selectors.json",
+  "spellFile": "../my-package/spell.yml",
+  "referenceVideosRoot": "../my-package/previews/reference",
+  "artifactsRoot": "./.snowstorm-mcp/artifacts"
+}

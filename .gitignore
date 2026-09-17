@@ -1,0 +1,7 @@
+node_modules/
+dist/
+release/
+.snowstorm-mcp/
+snowstorm-mcp.config.json
+test-results/
+playwright-report/

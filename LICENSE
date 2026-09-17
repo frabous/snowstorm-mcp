@@ -1,0 +1,8 @@
+Snowstorm MCP is licensed under the GNU General Public License, version 3 or
+later (GPL-3.0-or-later).
+
+The complete GPL-3.0 license text and the pinned Snowstorm source are provided
+by the required vendor/snowstorm submodule. Clone this repository with
+--recurse-submodules to obtain that source and license text.
+
+Snowstorm copyright (c) JannisX11 and contributors. See NOTICE.

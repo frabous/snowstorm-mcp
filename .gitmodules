@@ -1,0 +1,3 @@
+[submodule "vendor/snowstorm"]
+	path = vendor/snowstorm
+	url = https://github.com/JannisX11/snowstorm.git
