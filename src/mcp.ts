@@ -4,11 +4,16 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
 import { loadConfig } from "./config.js";
 import { openDesktop } from "./desktop-launcher.js";
-import { applyPatch, ParticleStore, summarizeParticle } from "./particle-store.js";
+import { applyPatch, assertJsonWithinLimits, ParticleStore, summarizeParticle } from "./particle-store.js";
 import { renderParticle } from "./renderer.js";
+import { renderScene } from "./scene-renderer.js";
 import { createTemplate, templateNames } from "./templates.js";
 import type { JsonObject, JsonPatchOperation, JsonValue } from "./types.js";
-import { validatePackage, validateParticle } from "./validator.js";
+import { validateParticle } from "./validator.js";
+import { validatePackage } from "./package-validator.js";
+import { patchParticlesBatch, queryParticles } from "./particle-service.js";
+import { inspectSpellTimeline, retimeSpell } from "./magicspells.js";
+import { probeParticle } from "./molang-probe.js";
 import { authoringGuideFor, authoringTopics, designBrief } from "./authoring-guide.js";
 import { VideoAnalyzer } from "./video.js";
 
@@ -18,13 +23,23 @@ function asObject(value: unknown, name: string): JsonObject {
 }
 
 function jsonResult(value: unknown, isError = false) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], isError };
+  return { content: [{ type: "text" as const, text: JSON.stringify(value) }], isError };
 }
 
 const patchOperationSchema = z.discriminatedUnion("op", [
-  z.object({ op: z.enum(["add", "replace", "test"]), path: z.string(), value: z.unknown() }),
-  z.object({ op: z.literal("remove"), path: z.string() })
+  z.object({ op: z.enum(["add", "replace", "test"]), path: z.string().max(512), value: z.unknown() }),
+  z.object({ op: z.literal("remove"), path: z.string().max(512) })
 ]);
+const particleFileSchema = z.string().max(512).refine((value) => {
+  const normalized = value.replaceAll("\\", "/");
+  return normalized.endsWith(".particle.json")
+    && !normalized.startsWith("/")
+    && !/^[A-Za-z]:/.test(normalized)
+    && normalized.split("/").every((part) => part && part !== "." && part !== "..");
+}, "Particle file must be a canonical relative .particle.json path.");
+const boundedBindingsSchema = z.record(z.string().max(64), z.string().max(512)).refine((value) => Object.keys(value).length <= 64, "At most 64 bindings are allowed.");
+const boundedSelectionSchema = z.record(z.string().max(64), z.string().max(512)).refine((value) => Object.keys(value).length <= 32, "At most 32 selected fields are allowed.");
+const particleDocumentSchema = z.record(z.string().max(256), z.unknown());
 
 async function createMcpServer(): Promise<McpServer> {
   const config = await loadConfig();
@@ -48,25 +63,43 @@ async function createMcpServer(): Promise<McpServer> {
 
   server.registerTool("particle_inspect", {
     description: "Inspect one particle. JSON is omitted by default to save context tokens.",
-    inputSchema: z.object({ file: z.string(), includeJson: z.boolean().default(false) })
+    inputSchema: z.object({ file: particleFileSchema, includeJson: z.boolean().default(false) })
   }, async ({ file, includeJson }) => {
     const source = await store.readRaw(file);
     return jsonResult({ digest: source.digest, summary: summarizeParticle(source.document, file), document: includeJson ? source.document : undefined });
   });
 
+  server.registerTool("particle_query", {
+    description: "Inspect several particles with filters and caller-selected JSON Pointer fields. Collapses values common to every result to reduce tokens.",
+    inputSchema: z.object({
+      files: z.array(particleFileSchema).max(100).optional(),
+      nameContains: z.string().max(256).optional(),
+      identifierContains: z.string().max(256).optional(),
+      texture: z.string().max(512).optional(),
+      components: z.array(z.string().max(256)).max(20).optional(),
+      select: boundedSelectionSchema.optional(),
+      collapseCommon: z.boolean().default(true)
+    })
+  }, async (options) => {
+    assertJsonWithinLimits(options, "particle_query request");
+    return jsonResult(await queryParticles(store, options));
+  });
+
   server.registerTool("particle_create", {
     description: "Create a new particle from a compact starter template or a supplied JSON document. Existing files are never overwritten by this tool.",
     inputSchema: z.object({
-      file: z.string(),
-      identifier: z.string().min(1),
-      texture: z.string().min(1),
+      file: particleFileSchema,
+      identifier: z.string().min(1).optional(),
+      texture: z.string().min(1).optional(),
       template: z.enum(templateNames).optional(),
-      document: z.unknown().optional(),
+      document: particleDocumentSchema.optional(),
       dryRun: z.boolean().default(false)
-    })
+    }).refine((value) => value.document !== undefined || Boolean(value.identifier && value.texture), "Supply document, or both identifier and texture.")
   }, async ({ file, identifier, texture, template, document, dryRun }) => {
+    assertJsonWithinLimits({ file, identifier, texture, template, document, dryRun }, "particle_create request");
     if (await store.exists(file)) throw new Error(`Refusing to overwrite existing particle: ${file}`);
-    const created = document ? asObject(document, "document") : createTemplate(template ?? "burst", identifier, texture);
+    const created = document !== undefined ? asObject(document, "document") : createTemplate(template ?? "burst", identifier!, texture!);
+    assertJsonWithinLimits(created, "Particle document");
     const validation = await validateParticle(created, config, file);
     if (!validation.valid) return jsonResult({ created: false, validation }, true);
     if (dryRun) return jsonResult({ created: false, dryRun: true, validation });
@@ -77,12 +110,13 @@ async function createMcpServer(): Promise<McpServer> {
   server.registerTool("particle_patch", {
     description: "Apply RFC 6902 add, replace, remove, and test operations to one particle. Uses an expected SHA-256 digest to avoid overwriting an externally changed file.",
     inputSchema: z.object({
-      file: z.string(),
-      operations: z.array(patchOperationSchema).min(1),
+      file: particleFileSchema,
+      operations: z.array(patchOperationSchema).min(1).max(100),
       expectedDigest: z.string().length(64),
       dryRun: z.boolean().default(false)
     })
   }, async ({ file, operations, expectedDigest, dryRun }) => {
+    assertJsonWithinLimits({ file, operations, expectedDigest, dryRun }, "particle_patch request");
     const source = await store.readRaw(file);
     const patched = applyPatch(source.document, operations as JsonPatchOperation[]);
     const validation = await validateParticle(patched, config, file);
@@ -92,25 +126,84 @@ async function createMcpServer(): Promise<McpServer> {
     return jsonResult({ updated: true, write, validation });
   });
 
+  server.registerTool("particle_patch_batch", {
+    description: "Validate and apply RFC 6902 patches as one preflighted batch with coordinated best-effort rollback. Dry-run is the default; every target requires its inspection digest.",
+    inputSchema: z.object({
+      targets: z.array(z.object({
+        file: particleFileSchema,
+        expectedDigest: z.string().length(64),
+        operations: z.array(patchOperationSchema).max(100).optional()
+      })).min(1).max(64),
+      commonOperations: z.array(patchOperationSchema).max(100).optional(),
+      bindings: boundedBindingsSchema.optional(),
+      dryRun: z.boolean().default(true)
+    })
+  }, async ({ targets, commonOperations, bindings, dryRun }) => {
+    assertJsonWithinLimits({ targets, commonOperations, bindings, dryRun }, "particle_patch_batch request");
+    const result = await patchParticlesBatch(store, config, {
+      targets: targets.map((target) => ({ ...target, operations: target.operations as JsonPatchOperation[] | undefined })),
+      commonOperations: commonOperations as JsonPatchOperation[] | undefined,
+      bindings,
+      dryRun
+    });
+    return jsonResult(result, !result.valid);
+  });
+
   server.registerTool("particle_validate", {
     description: "Validate Bedrock/Snowstorm structure, Blockbuster-compatible components, texture resolution, collision assumptions, and finite lifetime risks.",
-    inputSchema: z.object({ file: z.string() })
+    inputSchema: z.object({ file: particleFileSchema })
   }, async ({ file }) => jsonResult(await validateParticle(await store.read(file), config, file)));
 
   server.registerTool("particle_verify_package", {
-    description: "Validate selector JSON and report package inventory without modifying files.",
-    inputSchema: z.object({}).default({})
-  }, async () => {
-    const validation = await validatePackage(config);
-    const particles = await store.list();
-    return jsonResult({ ...validation, particleCount: particles.length, particleFiles: particles.map((particle) => particle.file) });
+    description: "Validate the full package graph: particles, PNG/UV assets, selectors, MagicSpells helpers, cumulative timing, anchors and helper durations.",
+    inputSchema: z.object({
+      mainSpell: z.string().max(256).optional(),
+      ticksPerSecond: z.number().int().min(1).max(100).default(20),
+      detail: z.enum(["summary", "full"]).default("summary")
+    }).default({ ticksPerSecond: 20, detail: "summary" })
+  }, async (options) => {
+    const validation = await validatePackage(config, store, options);
+    return jsonResult(validation, !validation.valid);
+  });
+
+  server.registerTool("spell_timeline_inspect", {
+    description: "Parse the configured MagicSpells YAML strictly and return absolute helper starts for one parent MultiSpell.",
+    inputSchema: z.object({ mainSpell: z.string().max(256).optional(), ticksPerSecond: z.number().int().min(1).max(100).default(20) })
+  }, async ({ mainSpell, ticksPerSecond }) => {
+    const timeline = await inspectSpellTimeline(config, mainSpell, ticksPerSecond);
+    return jsonResult({
+      mainSpell: timeline.mainSpell,
+      ticksPerSecond,
+      digest: timeline.digest,
+      startsTicks: timeline.starts,
+      startsSeconds: Object.fromEntries(Object.entries(timeline.starts).map(([helper, ticks]) => [helper, ticks / ticksPerSecond])),
+      occurrences: timeline.occurrences,
+      endTicks: timeline.endTicks,
+      order: timeline.order,
+      issues: timeline.issues
+    }, timeline.issues.some((issue) => issue.severity === "error"));
+  });
+
+  server.registerTool("spell_retime", {
+    description: "Retiming-only MagicSpells edit. Rebuild one MultiSpell sequence from absolute helper starts while preserving the rest of the YAML. Dry-run by default.",
+    inputSchema: z.object({
+      mainSpell: z.string().max(256),
+      expectedDigest: z.string().length(64),
+      starts: z.record(z.string().max(256), z.number().nonnegative()).refine((value) => Object.keys(value).length <= 256, "At most 256 starts are allowed."),
+      unit: z.enum(["ticks", "seconds"]).default("seconds"),
+      ticksPerSecond: z.number().int().min(1).max(100).default(20),
+      dryRun: z.boolean().default(true)
+    })
+  }, async (options) => {
+    assertJsonWithinLimits(options, "spell_retime request");
+    return jsonResult(await retimeSpell(config, options));
   });
 
   server.registerTool("particle_render", {
     description: "Render one particle through Snowstorm's local WebGL preview. Returns a PNG inline and optionally writes GIF or MP4 artifacts. This is not proof of the Minecraft render.",
     inputSchema: z.object({
-      file: z.string(),
-      durationSeconds: z.number().positive().max(15).default(1.5),
+      file: particleFileSchema,
+      durationSeconds: z.number().positive().max(30).default(1.5),
       fps: z.number().int().min(1).max(30).default(12),
       width: z.number().int().min(320).max(1920).default(960),
       height: z.number().int().min(240).max(1080).default(540),
@@ -127,9 +220,70 @@ async function createMcpServer(): Promise<McpServer> {
     };
   });
 
+  server.registerTool("particle_render_scene", {
+    description: "Render a deterministic multi-layer Snowstorm scene on an absolute timeline. Returns a contact sheet inline plus GIF/MP4 and finite-lifetime evidence on disk.",
+    inputSchema: z.object({
+      layers: z.array(z.object({
+        file: particleFileSchema,
+        startSeconds: z.number().nonnegative(),
+        position: z.tuple([z.number(), z.number(), z.number()]).optional()
+      })).max(64).optional(),
+      mainSpell: z.string().optional(),
+      renderStart: z.number().nonnegative(),
+      renderEnd: z.number().positive(),
+      camera: z.object({
+        position: z.tuple([z.number(), z.number(), z.number()]),
+        target: z.tuple([z.number(), z.number(), z.number()])
+      }).optional(),
+      sampleTimes: z.array(z.number().nonnegative()).max(24).optional(),
+      fps: z.number().int().min(1).max(30).default(10),
+      width: z.number().int().min(320).max(1920).default(960),
+      height: z.number().int().min(240).max(1080).default(540),
+      format: z.enum(["png", "gif", "mp4"]).default("gif"),
+      seed: z.number().int().default(1)
+    })
+  }, async (options) => {
+    assertJsonWithinLimits(options, "particle_render_scene request");
+    const result = await renderScene(store, config, options);
+    const image = await readFile(result.artifacts.contactSheet);
+    return { content: [
+      { type: "text" as const, text: JSON.stringify(result) },
+      { type: "image" as const, data: image.toString("base64"), mimeType: "image/png" }
+    ], isError: !result.valid };
+  });
+
+  server.registerTool("particle_probe", {
+    description: "Evaluate selected numeric or Molang fields at explicit particle ages and run generic monotonic, distance and ratio assertions.",
+    inputSchema: z.object({
+      file: particleFileSchema,
+      select: boundedSelectionSchema,
+      samples: z.array(z.object({
+        age: z.number().nonnegative(),
+        lifetime: z.number().positive().optional(),
+        emitterAge: z.number().nonnegative().optional(),
+        random: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+        variables: z.record(z.string().max(128), z.number()).refine((value) => Object.keys(value).length <= 64, "At most 64 variables are allowed.").optional()
+      })).min(1).max(32),
+      assertions: z.array(z.object({
+        field: z.string(),
+        sampleIndexes: z.array(z.number().int().nonnegative()).min(1).max(32),
+        metric: z.enum(["value", "length", "distance"]),
+        direction: z.enum(["increasing", "decreasing"]).optional(),
+        center: z.array(z.number()).optional(),
+        minRatio: z.number().optional(),
+        maxRatio: z.number().optional()
+      })).max(20).optional(),
+      seed: z.number().int().default(1)
+    })
+  }, async (options) => {
+    assertJsonWithinLimits(options, "particle_probe request");
+    const result = await probeParticle(store, config, options);
+    return jsonResult(result, !result.valid);
+  });
+
   server.registerTool("particle_open_desktop", {
     description: "Builds must already exist. Opens one particle in the local secure Electron Snowstorm editor; its Save safely control preserves Blockbuster extensions.",
-    inputSchema: z.object({ file: z.string() })
+    inputSchema: z.object({ file: particleFileSchema })
   }, async ({ file }) => jsonResult(await openDesktop(store, config, file)));
 
   server.registerTool("particle_authoring_guide", {

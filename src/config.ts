@@ -100,9 +100,14 @@ export function snowstormRoot(projectRoot: string): string {
     return path.resolve(process.env.SNOWSTORM_MCP_SNOWSTORM_ROOT);
   }
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  if (resourcesPath && !resourcesPath.endsWith("node_modules/electron/dist/resources")) {
-    const packaged = path.join(resourcesPath, "snowstorm");
-    return packaged;
+  if (resourcesPath) {
+    const normalized = resourcesPath.replaceAll("\\", "/");
+    if (!normalized.endsWith("node_modules/electron/dist/resources")) {
+      const packaged = path.join(resourcesPath, "snowstorm");
+      if (existsSync(packaged)) {
+        return packaged;
+      }
+    }
   }
   return path.join(projectRoot, "vendor", "snowstorm");
 }

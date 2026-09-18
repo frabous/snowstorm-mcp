@@ -7,8 +7,12 @@ Snowstorm is used for simulation only. The server preserves `blockbuster:*` exte
 ## Features
 
 - Create, inspect, patch and validate `.particle.json` files.
+- Query selected fields across many particles and patch a preflighted batch with coordinated rollback.
 - Preserve Blockbuster fields when the Snowstorm editor saves a file.
-- Render Snowstorm previews as PNG, GIF or MP4.
+- Validate particle, texture, selector and MagicSpells links as one package graph.
+- Inspect or retime a MagicSpells `.MultiSpell` without rewriting unrelated definitions.
+- Render deterministic single-particle or absolute-timeline scene previews as PNG, GIF or MP4.
+- Probe Molang values at explicit ages with numeric assertions.
 - Open a selected particle in a secure local Electron window.
 - Expose the built-in Blockbuster/Snowstorm authoring guide and effect design briefs to MCP clients.
 - Import source videos into an automatically managed folder, then analyze them with FFmpeg scene detection.
@@ -69,12 +73,29 @@ Restart OpenCode after changing its configuration.
 
 ## Particle Workflow
 
-1. Call `particle_design_brief` with `impact`, `aura`, `trail`, `shockwave` or `smoke`.
-2. Call `particle_create` or inspect a close reference with `particle_inspect`.
-3. Use `particle_patch` with the `expectedDigest` returned by inspection.
-4. Run `particle_validate`, then `particle_render`.
-5. Run `particle_verify_package` before merging selectors. Test spell helpers with the target package separately.
-6. Test the final effect in Minecraft. Snowstorm GIFs do not prove Blockbuster behavior.
+1. Call `particle_design_brief`, or request one focused topic from `particle_authoring_guide`.
+2. Use `particle_query` to compare only the required fields across references. It collapses common values.
+3. Call `particle_create`, `particle_patch`, or dry-run `particle_patch_batch` before executing the batch.
+4. Run `particle_verify_package`. Use `detail: "full"` only when the timeline rows are needed.
+5. Use `particle_probe` for motion or scale claims, then `particle_render_scene` for the relevant absolute-time window.
+6. Test the final effect in Minecraft. Snowstorm evidence does not prove Blockbuster behavior.
+
+For timing-only changes, inspect with `spell_timeline_inspect`, then call `spell_retime` with its digest. Starts can be supplied in ticks or seconds and must align to the configured tick grid.
+
+Example projected query:
+
+```json
+{
+  "nameContains": "shockwave",
+  "select": {
+    "count": "/particle_effect/components/minecraft:emitter_rate_instant/num_particles",
+    "lifetime": "/particle_effect/components/minecraft:particle_lifetime_expression/max_lifetime"
+  },
+  "collapseCommon": true
+}
+```
+
+`particle_render_scene` accepts explicit `{file, startSeconds, position}` layers or derives layers, absolute starts and static helper offsets from the configured MagicSpells graph. Render windows are capped at 30 seconds and 300 frames. The result includes compact lifecycle checks, a contact sheet, a report and an optional GIF/MP4.
 
 `particle_authoring_guide` embeds the Snowstorm/Blockbuster skill directly in the MCP. Request one of `workflow`, `components`, `blockbuster`, `motion`, `textures`, `magicspells`, `validation` or `reference-video` to minimize context; omit `topic` only when the AI needs the complete guide.
 
@@ -139,10 +160,12 @@ The `Save safely` control merges Snowstorm's output with the prior Blockbuster d
 
 | Tool | Purpose |
 | --- | --- |
-| `particle_list` / `particle_inspect` | Compact inventory and optional source JSON. |
-| `particle_create` / `particle_patch` | Safe authoring operations. |
-| `particle_validate` / `particle_verify_package` | Particle and package checks. |
-| `particle_render` | Snowstorm PNG, GIF or MP4 preview. |
+| `particle_list` / `particle_inspect` / `particle_query` | Compact inventory, source inspection and projected multi-file reads. |
+| `particle_create` / `particle_patch` / `particle_patch_batch` | Safe single-file writes or preflighted batches with best-effort rollback. |
+| `particle_validate` / `particle_verify_package` | Semantic particle and complete package-graph checks. |
+| `spell_timeline_inspect` / `spell_retime` | Strict MagicSpells timeline reading and timing-only edits. |
+| `particle_probe` | Numeric Molang samples and generic assertions. |
+| `particle_render` / `particle_render_scene` | Single-particle or deterministic multi-layer previews. |
 | `particle_open_desktop` | Electron editor. |
 | `particle_authoring_guide` / `particle_design_brief` | Embedded Snowstorm authoring knowledge. |
 | `video_import` | Copy a user-provided video into the automatic managed directory. |
@@ -152,7 +175,7 @@ The `Save safely` control merges Snowstorm's output with the prior Blockbuster d
 
 ## Security and Limits
 
-The server confines configured particle, texture and reference-video paths, rejects traversal, serializes MCP writes, and creates backups. Do not run it against folders writable by untrusted local processes.
+The server confines configured particle, texture and reference-video paths, rejects traversal including symlink escapes, serializes MCP writes, and creates backups. Batch writes lock every target, verify every digest before mutation and attempt every rollback if a rename fails. A process crash can still interrupt a multi-file commit, so retained backups remain the recovery source. Do not run it against folders writable by untrusted local processes.
 
 Generated previews validate the local Snowstorm simulator only. Verify texture blending, anchors, collisions, selector links, MagicSpells timing and performance inside Minecraft before shipping.
 

@@ -26,6 +26,7 @@ export interface ParticleSummary {
   material: string | null;
   components: string[];
   blockbusterComponents: string[];
+  error?: string;
 }
 
 export interface ValidationIssue {
@@ -39,4 +40,30 @@ export interface ValidationResult {
   valid: boolean;
   issues: ValidationIssue[];
   summary: ParticleSummary;
+  texture?: TextureMetadata;
+}
+
+export interface TextureMetadata {
+  path: string;
+  bytes: number;
+  width: number;
+  height: number;
+  bitDepth: number;
+  colorType: number;
+  hasAlphaChannel: boolean;
+}
+
+export interface TimelineLayer {
+  helper: string;
+  startTicks: number;
+  startSeconds: number;
+  selector: string | null;
+  scheme: string | null;
+  file: string | null;
+  anchor: "caster_attached" | "fixed_at_helper_launch" | "unknown";
+  helperDuration: number | null;
+  emitterSeconds: number | null;
+  particleSeconds: number | null;
+  latestParticleEndSeconds: number | null;
+  relativeOffset: string | null;
 }
