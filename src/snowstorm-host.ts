@@ -55,7 +55,7 @@ export interface SnowstormHost {
   close(): Promise<void>;
 }
 
-export async function startSnowstormHost(snowstormDirectory: string, includeDesktopBridge = false): Promise<SnowstormHost> {
+export async function startSnowstormHost(snowstormDirectory: string, includeDesktopBridge = false, includeAutomationBridge = false): Promise<SnowstormHost> {
   const canonicalSnowstormDirectory = await realpath(snowstormDirectory);
   const server = createServer(async (request, response) => {
     try {
@@ -82,6 +82,12 @@ export async function startSnowstormHost(snowstormDirectory: string, includeDesk
         return;
       }
       let content = await readFile(target);
+      if (includeAutomationBridge && requested === "dist/app.js") {
+        const source = content.toString("utf8");
+        const hook = "window.Emitter=Pw,";
+        if (source.split(hook).length !== 2) throw new Error("Pinned Snowstorm automation bridge no longer matches dist/app.js.");
+        content = Buffer.from(source.replace(hook, "window.__preview=Qx,window.__engine=_x,window.Emitter=Pw,"));
+      }
       if (requested === "index.html") {
         const bridge = includeDesktopBridge ? '<script src="/bridge.js"></script>' : "";
         content = Buffer.from(content.toString("utf8")

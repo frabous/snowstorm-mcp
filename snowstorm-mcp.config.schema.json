@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/snowstorm-mcp.config.schema.json",
+  "title": "Snowstorm MCP project configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["particlesRoot", "resourcePackRoot", "selectorsFile", "spellFile", "artifactsRoot"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "projectName": { "type": "string", "minLength": 1 },
+    "particlesRoot": { "type": "string", "minLength": 1 },
+    "resourcePackRoot": { "type": "string", "minLength": 1 },
+    "selectorsFile": { "type": "string", "minLength": 1 },
+    "spellFile": { "type": "string", "minLength": 1 },
+    "referenceVideosRoot": { "type": "string", "minLength": 1 },
+    "artifactsRoot": { "type": "string", "minLength": 1 }
+  }
+}

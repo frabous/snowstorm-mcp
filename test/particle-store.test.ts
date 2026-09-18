@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import { requirePathInside } from "../src/config.js";
+import { requirePathInside, snowstormRoot } from "../src/config.js";
 import { applyPatch, mergeSnowstormExport, summarizeParticle } from "../src/particle-store.js";
 import { resolveTexturePath } from "../src/texture.js";
 import { designBrief } from "../src/authoring-guide.js";
@@ -31,6 +31,17 @@ describe("particle store", () => {
     const components = effect.components as JsonObject;
     expect((components["minecraft:emitter_rate_instant"] as JsonObject).num_particles).toBe(12);
     expect((original.particle_effect as JsonObject).components).not.toBe(components);
+  });
+
+  it("rejects prototype-mutating JSON pointers", () => {
+    expect(() => applyPatch(original, [{ op: "add", path: "/particle_effect/components/__proto__/minecraft:emitter_rate_instant", value: {} }])).toThrow("Unsafe JSON pointer");
+    expect(Object.hasOwn({}, "minecraft:emitter_rate_instant")).toBe(false);
+  });
+
+  it("rejects particle documents beyond the nesting limit", () => {
+    let nested: JsonObject = {};
+    for (let depth = 0; depth < 70; depth += 1) nested = { child: nested };
+    expect(() => applyPatch(nested, [{ op: "add", path: "/value", value: 1 }])).toThrow("nesting depth");
   });
 
   it("preserves Blockbuster fields when Snowstorm exports a supported edit", () => {
@@ -91,5 +102,19 @@ describe("particle store", () => {
     expect(parseTimecode(0.5)).toBe(0.5);
     expect(formatTimecode(62.375)).toBe("00:01:02.375");
     expect(() => parseTimecode("1:61:00")).toThrow("Invalid");
+  });
+
+  it("resolves vendor snowstorm in development electron on Windows", () => {
+    const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+    try {
+      (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = "C:\\app\\node_modules\\electron\\dist\\resources";
+      expect(snowstormRoot("C:\\app")).toBe(path.join("C:\\app", "vendor", "snowstorm"));
+    } finally {
+      if (originalResourcesPath === undefined) {
+        delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+      } else {
+        (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+      }
+    }
   });
 });
