@@ -16,6 +16,7 @@ import { inspectSpellTimeline, retimeSpell } from "./magicspells.js";
 import { probeParticle } from "./molang-probe.js";
 import { authoringGuideFor, authoringTopics, designBrief } from "./authoring-guide.js";
 import { VideoAnalyzer } from "./video.js";
+import { sceneCameraSchema } from "./input-schema.js";
 
 function asObject(value: unknown, name: string): JsonObject {
   if (!value || Array.isArray(value) || typeof value !== "object") throw new Error(`${name} must be a JSON object.`);
@@ -231,10 +232,7 @@ async function createMcpServer(): Promise<McpServer> {
       mainSpell: z.string().optional(),
       renderStart: z.number().nonnegative(),
       renderEnd: z.number().positive(),
-      camera: z.object({
-        position: z.tuple([z.number(), z.number(), z.number()]),
-        target: z.tuple([z.number(), z.number(), z.number()])
-      }).optional(),
+      camera: sceneCameraSchema.optional(),
       sampleTimes: z.array(z.number().nonnegative()).max(24).optional(),
       fps: z.number().int().min(1).max(30).default(10),
       width: z.number().int().min(320).max(1920).default(960),
@@ -328,6 +326,20 @@ async function createMcpServer(): Promise<McpServer> {
     };
   });
 
+  server.registerTool("video_audio_transients", {
+    description: "Rank high-pass audio attacks in a bounded reference-video window. Scores are mixed-track candidates, not isolated sound-effect recognition.",
+    inputSchema: z.object({
+      file: z.string().min(1).max(512),
+      startSeconds: z.number().nonnegative().default(0),
+      durationSeconds: z.number().positive().max(60).default(10),
+      maxResults: z.number().int().min(1).max(64).default(24),
+      minimumSpacingSeconds: z.number().min(0.05).max(5).default(0.24),
+      highPassHz: z.number().min(50).max(10_000).default(250)
+    })
+  }, async ({ file, startSeconds, durationSeconds, maxResults, minimumSpacingSeconds, highPassHz }) => {
+    return jsonResult(await videos.audioTransients(file, { startSeconds, durationSeconds, maxResults, minimumSpacingSeconds, highPassHz }));
+  });
+
   server.registerTool("video_extract_frames", {
     description: "Extract decoded JPEG frames at requested seconds or HH:MM:SS.mmm targets. The response records each requested target and the decoded frame PTS. Returns a contact sheet plus a manifest and individual frame paths.",
     inputSchema: z.object({
@@ -343,6 +355,20 @@ async function createMcpServer(): Promise<McpServer> {
         { type: "image" as const, data: contactSheet.toString("base64"), mimeType: "image/jpeg" }
       ]
     };
+  });
+
+  server.registerTool("video_compare", {
+    description: "Create a side-by-side MP4: reference video on the left, a Snowstorm MP4 artifact on the right, with the reference audio retained. previewPath must be inside MCP artifacts.",
+    inputSchema: z.object({
+      file: z.string().min(1).max(512),
+      previewPath: z.string().min(1).max(512),
+      referenceStartSeconds: z.number().nonnegative(),
+      durationSeconds: z.number().positive().max(30),
+      panelWidth: z.number().int().min(320).max(1920).default(640),
+      panelHeight: z.number().int().min(240).max(1080).default(360)
+    })
+  }, async ({ file, previewPath, referenceStartSeconds, durationSeconds, panelWidth, panelHeight }) => {
+    return jsonResult(await videos.compare(file, { previewPath, referenceStartSeconds, durationSeconds, panelWidth, panelHeight }));
   });
 
   return server;

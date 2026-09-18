@@ -3,12 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ParticleStore } from "../src/particle-store.js";
-import { renderScene } from "../src/scene-renderer.js";
+import { enforceSceneFrameBudget, renderScene } from "../src/scene-renderer.js";
 import { renderParticle } from "../src/renderer.js";
 import { projectFixture, validParticle } from "./fixtures.js";
 import type { JsonObject } from "../src/types.js";
 
 describe("scene render budgets", () => {
+  it("allows longer normal-resolution scenes while bounding raster work", () => {
+    expect(() => enforceSceneFrameBudget(325, 960, 720)).not.toThrow();
+    expect(() => enforceSceneFrameBudget(751, 960, 720)).toThrow("750 frames");
+    expect(() => enforceSceneFrameBudget(300, 1920, 1080)).toThrow("rendered-pixel budget");
+  });
+
   it("rejects expression-valued particle counts before launching Chromium", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-scene-"));
     const config = await projectFixture(root);

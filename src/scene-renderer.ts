@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -10,6 +10,9 @@ import { startSnowstormHost } from "./snowstorm-host.js";
 import { snowstormRoot } from "./config.js";
 import { validatePackage } from "./package-validator.js";
 import { particleTiming } from "./validator.js";
+
+export const MAX_SCENE_FRAMES = 750;
+export const MAX_SCENE_RENDERED_PIXELS = 480_000_000;
 
 export interface SceneLayer {
   file: string;
@@ -40,6 +43,15 @@ export interface SceneRenderResult {
   caveats: string[];
 }
 
+export function enforceSceneFrameBudget(frameCount: number, width: number, height: number): void {
+  if (frameCount > MAX_SCENE_FRAMES) {
+    throw new Error(`Scene render is limited to ${MAX_SCENE_FRAMES} frames. Lower fps or split the render window.`);
+  }
+  if (frameCount * width * height > MAX_SCENE_RENDERED_PIXELS) {
+    throw new Error(`Scene render exceeds the ${MAX_SCENE_RENDERED_PIXELS.toLocaleString("en-US")} rendered-pixel budget. Lower resolution, fps, or duration.`);
+  }
+}
+
 function projectRoot(config: ProjectConfig): string {
   return path.dirname(config.configPath);
 }
@@ -59,6 +71,58 @@ function runFfmpeg(args: string[]): Promise<void> {
       code === 0 ? resolve() : reject(new Error(`ffmpeg failed (${code}): ${error.slice(-1000)}`));
     });
   });
+}
+
+interface FrameEncoder {
+  output: string;
+  write(frame: Buffer): Promise<void>;
+  finish(): Promise<void>;
+  abort(): Promise<void>;
+}
+
+function createFrameEncoder(format: "gif" | "mp4", fps: number, artifactDirectory: string): FrameEncoder {
+  const output = path.join(artifactDirectory, format === "gif" ? "scene.gif" : "scene.mp4");
+  const encode = format === "gif"
+    ? ["-filter_complex", "split[s0][s1];[s0]palettegen=stats_mode=single[p];[s1][p]paletteuse=new=1", output]
+    : ["-c:v", "libx264", "-pix_fmt", "yuv420p", output];
+  const child = spawn("ffmpeg", ["-y", "-nostdin", "-f", "image2pipe", "-vcodec", "png", "-framerate", String(fps), "-i", "pipe:0", ...encode], { stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
+  let error = "";
+  let settled = false;
+  let completeResolve: () => void;
+  let completeReject: (error: Error) => void;
+  const complete = new Promise<void>((resolve, reject) => {
+    completeResolve = resolve;
+    completeReject = reject;
+  });
+  void complete.catch(() => undefined);
+  const settle = (failure?: Error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    failure ? completeReject(failure) : completeResolve();
+  };
+  const timeout = setTimeout(() => {
+    child.kill();
+    settle(new Error("Scene animation encoding exceeded 240000ms."));
+  }, 240_000);
+  child.stderr.on("data", (chunk: Buffer) => { error = `${error}${chunk.toString()}`.slice(-16_384); });
+  child.once("error", (failure) => settle(failure));
+  child.once("exit", (code) => settle(code === 0 ? undefined : new Error(`ffmpeg failed (${code}): ${error.slice(-1000)}`)));
+  return {
+    output,
+    write: (frame) => new Promise((resolve, reject) => child.stdin.write(frame, (failure) => failure ? reject(failure) : resolve())),
+    finish: async () => {
+      child.stdin.end();
+      await complete;
+    },
+    abort: async () => {
+      if (!settled) {
+        child.kill();
+        settle(new Error("Scene animation encoding was aborted."));
+      }
+      await complete.catch(() => undefined);
+    }
+  };
 }
 
 function withTimeout<T>(operation: Promise<T>, milliseconds: number, label: string): Promise<T> {
@@ -140,7 +204,7 @@ export async function renderScene(store: ParticleStore, config: ProjectConfig, o
   if (options.renderStart < 0 || options.renderEnd <= options.renderStart || options.renderEnd - options.renderStart > 30) throw new Error("Render window must be positive and at most 30 seconds.");
   if (!Number.isInteger(fps) || fps < 1 || fps > 30) throw new Error("fps must be an integer from 1 to 30.");
   const frameCount = Math.floor((options.renderEnd - options.renderStart) * fps) + 1;
-  if (frameCount > 300) throw new Error("Scene render is limited to 300 frames.");
+  enforceSceneFrameBudget(frameCount, width, height);
   const requestedLayers = await resolveLayers(store, config, options);
   if (!requestedLayers.length || requestedLayers.length > 64) throw new Error("Scene render requires 1 to 64 layers.");
   const sources = new Map<string, Awaited<ReturnType<ParticleStore["readRaw"]>> & { lifetime: number; maximumParticles: number }>();
@@ -173,12 +237,14 @@ export async function renderScene(store: ParticleStore, config: ProjectConfig, o
   let host: Awaited<ReturnType<typeof startSnowstormHost>> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   let browserDeadline: NodeJS.Timeout | undefined;
+  let encoder: FrameEncoder | undefined;
   let completed = false;
   const checks: Array<{ file: string; peak: number; finite: boolean; remaining: number }> = [];
   try {
     host = await startSnowstormHost(snowstormRoot(projectRoot(config)), false, true);
     browser = await chromium.launch({ headless: true });
-    browserDeadline = setTimeout(() => { void browser?.close(); }, 120_000);
+    const renderTimeout = Math.min(240_000, Math.max(120_000, frameCount * 320));
+    browserDeadline = setTimeout(() => { void browser?.close(); }, Math.min(360_000, 120_000 + renderTimeout));
     const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
     await page.goto(`${host.url}/index.html`, { waitUntil: "networkidle" });
     await page.waitForFunction(() => Boolean((window as typeof window & { __preview?: unknown; __engine?: unknown }).__preview && (window as typeof window & { __engine?: unknown }).__engine));
@@ -195,10 +261,13 @@ export async function renderScene(store: ParticleStore, config: ProjectConfig, o
       root.__configs = {};
       root.__layers = [];
     }, options.seed ?? 1);
+    const lifecycleDeadline = Date.now() + 120_000;
     for (const layer of layers) {
       if (checks.some((entry) => entry.file === layer.file)) continue;
       const source = sources.get(layer.file)!;
       await loadConfig(page, layer.file, source.raw, await textureDataUrl(source.document, config));
+      const lifecycleRemaining = lifecycleDeadline - Date.now();
+      if (lifecycleRemaining <= 0) throw new Error("Lifecycle verification exceeded the 120000ms scene budget.");
       const result = await withTimeout(page.evaluate(({ name, end }) => {
         const root = window as typeof window & { Emitter: any; __engine: any; __configs: Record<string, any> };
         const emitter = new root.__engine.Emitter(root.Emitter.scene, root.__configs[name], { loop_mode: "once", parent_mode: "world" });
@@ -217,7 +286,7 @@ export async function renderScene(store: ParticleStore, config: ProjectConfig, o
         const output = { peak, finite, remaining: emitter.particles.length };
         emitter.delete();
         return output;
-      }, { name: layer.file, end: source.lifetime }), 30_000, `Lifecycle verification for ${layer.file}`);
+      }, { name: layer.file, end: source.lifetime }), Math.min(30_000, lifecycleRemaining), `Lifecycle verification for ${layer.file}`);
       checks.push({ file: layer.file, ...result });
     }
     const positioned = layers.flatMap((layer) => layer.position ? [layer.position] : []);
@@ -250,7 +319,8 @@ export async function renderScene(store: ParticleStore, config: ProjectConfig, o
       return [frame, options.renderStart + frame / fps];
     }));
     const sampleFrameIndexes = [...sampleFrames.keys()].sort((left, right) => left - right);
-    const framePaths: string[] = [];
+    const preview = path.join(artifactDirectory, "preview.png");
+    encoder = format === "png" ? undefined : createFrameEncoder(format, fps, artifactDirectory);
     const samplePaths: string[] = [];
     for (let frame = 0; frame < frameCount; frame += 1) {
       const time = options.renderStart + frame / fps;
@@ -282,30 +352,25 @@ export async function renderScene(store: ParticleStore, config: ProjectConfig, o
         }
         root.__preview.renderer.render(root.__preview.scene, root.__preview.camera);
       }, { layers, time }), 10_000, `Scene frame ${frame}`);
-      const framePath = path.join(artifactDirectory, `frame-${String(frame).padStart(4, "0")}.png`);
-      framePaths.push(framePath);
-      await page.locator("#canvas").screenshot({ path: framePath });
+      const image = await page.locator("#canvas").screenshot();
+      if (encoder) await encoder.write(image);
       if (sampleFrames.has(frame)) {
         const samplePath = path.join(artifactDirectory, `sample-${String(sampleFrameIndexes.indexOf(frame)).padStart(4, "0")}.png`);
         samplePaths.push(samplePath);
-        await cp(framePath, samplePath);
+        await writeFile(samplePath, image);
       }
+      if (frame === frameCount - 1) await writeFile(preview, image);
     }
-    const preview = path.join(artifactDirectory, "preview.png");
-    await cp(path.join(artifactDirectory, `frame-${String(frameCount - 1).padStart(4, "0")}.png`), preview);
+    if (encoder) {
+      await encoder.finish();
+      encoder = undefined;
+    }
     const sampleCount = sampleFrameIndexes.length;
     const columns = Math.min(3, sampleCount);
     const rows = Math.ceil(sampleCount / columns);
     const contactSheet = path.join(artifactDirectory, "contact-sheet.png");
     await runFfmpeg(["-framerate", "1", "-i", path.join(artifactDirectory, "sample-%04d.png"), "-vf", `tile=${columns}x${rows}:padding=4:margin=4`, "-frames:v", "1", contactSheet]);
-    let animation: string | undefined;
-    if (format === "gif") {
-      animation = path.join(artifactDirectory, "scene.gif");
-      await runFfmpeg(["-framerate", String(fps), "-i", path.join(artifactDirectory, "frame-%04d.png"), "-vf", "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse", animation]);
-    } else if (format === "mp4") {
-      animation = path.join(artifactDirectory, "scene.mp4");
-      await runFfmpeg(["-framerate", String(fps), "-i", path.join(artifactDirectory, "frame-%04d.png"), "-c:v", "libx264", "-pix_fmt", "yuv420p", animation]);
-    }
+    const animation = format === "png" ? undefined : path.join(artifactDirectory, format === "gif" ? "scene.gif" : "scene.mp4");
     const valid = checks.every((entry) => entry.peak > 0 && entry.finite && entry.remaining === 0);
     const report = path.join(artifactDirectory, "report.json");
     const result: SceneRenderResult = {
@@ -321,11 +386,12 @@ export async function renderScene(store: ParticleStore, config: ProjectConfig, o
       caveats: ["Snowstorm preview only; validate in Minecraft before shipping.", "Fixed-anchor composition assumes a stationary caster unless explicit layer transforms are supplied."]
     };
     await writeFile(report, `${JSON.stringify({ ...result, layerChecks: checks, sampleTimes: [...sampleFrames.values()] }, null, 2)}\n`);
-    await Promise.all([...framePaths, ...samplePaths].map((file) => rm(file, { force: true })));
+    await Promise.all(samplePaths.map((file) => rm(file, { force: true })));
     completed = true;
     return result;
   } finally {
     if (browserDeadline) clearTimeout(browserDeadline);
+    await encoder?.abort();
     await Promise.allSettled([browser?.close(), host?.close()]);
     if (!completed) await rm(artifactDirectory, { recursive: true, force: true });
   }

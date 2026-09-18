@@ -95,7 +95,7 @@ Example projected query:
 }
 ```
 
-`particle_render_scene` accepts explicit `{file, startSeconds, position}` layers or derives layers, absolute starts and static helper offsets from the configured MagicSpells graph. Render windows are capped at 30 seconds and 300 frames. The result includes compact lifecycle checks, a contact sheet, a report and an optional GIF/MP4.
+`particle_render_scene` accepts explicit `{file, startSeconds, position}` layers or derives layers, absolute starts and static helper offsets from the configured MagicSpells graph. Camera coordinates accept finite numbers or numeric strings. Render windows are capped at 30 seconds, 750 frames and a 480-million rendered-pixel budget. The result includes compact lifecycle checks, a contact sheet, a report and an optional GIF/MP4.
 
 `particle_authoring_guide` embeds the Snowstorm/Blockbuster skill directly in the MCP. Request one of `workflow`, `components`, `blockbuster`, `motion`, `textures`, `magicspells`, `validation` or `reference-video` to minimize context; omit `topic` only when the AI needs the complete guide.
 
@@ -140,7 +140,18 @@ For a closer VFX transition, call `video_extract_frames`. It reports both the re
 }
 ```
 
-The server places generated video artifacts under `.snowstorm-mcp/artifacts/video/`, leaving source videos and existing reference images untouched. Scene detection selects visual discontinuities; it does not identify VFX semantics, layers, camera effects or audio beats by itself.
+For audio-led timing, use `video_audio_transients`. It ranks high-pass attacks in a bounded mixed-audio window; these are candidate timings, not isolated SFX recognition. Use `video_compare` after a scene render to make a reference-left/Snowstorm-right MP4 with the reference audio retained. It only reads preview MP4s inside the MCP artifact root and writes its output under `.snowstorm-mcp/artifacts/comparisons/`.
+
+```json
+{
+  "file": "megumin-reference.mp4",
+  "previewPath": "C:\\project\\.snowstorm-mcp\\artifacts\\scenes\\run\\scene.mp4",
+  "referenceStartSeconds": 32,
+  "durationSeconds": 4.5
+}
+```
+
+The server places generated video artifacts under `.snowstorm-mcp/artifacts/video/`, leaving source videos and existing reference images untouched. Scene detection selects visual discontinuities; it does not identify VFX semantics, layers or camera effects by itself.
 
 ## Desktop Editor
 
@@ -171,7 +182,9 @@ The `Save safely` control merges Snowstorm's output with the prior Blockbuster d
 | `video_import` | Copy a user-provided video into the automatic managed directory. |
 | `video_list` | Discover imported reference videos. |
 | `video_analyze` | Scene-aware frames, contact sheet and manifest. |
+| `video_audio_transients` | Mixed-track high-pass attack candidates for timing. |
 | `video_extract_frames` | Targeted timecode extraction with decoded PTS reporting. |
+| `video_compare` | Side-by-side reference/preview MP4 with reference audio. |
 
 ## Security and Limits
 

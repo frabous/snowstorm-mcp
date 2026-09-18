@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { chromium } from "playwright";
@@ -24,6 +24,7 @@ export interface RenderResult {
   previewPng: string;
   animation?: string;
   frameCount: number;
+  report: string;
 }
 
 function projectRoot(config: ProjectConfig): string {
@@ -114,8 +115,11 @@ export async function renderParticle(store: ParticleStore, config: ProjectConfig
       await runFfmpeg(["-framerate", String(fps), "-i", path.join(artifactDirectory, "frame-%04d.png"), "-c:v", "libx264", "-pix_fmt", "yuv420p", animation]);
     }
     await Promise.all([...framePaths, ...(palette ? [palette] : [])].map((file) => rm(file, { force: true })));
+    const report = path.join(artifactDirectory, "report.json");
+    const result = { artifactDirectory, previewPng, animation, frameCount, report };
+    await writeFile(report, `${JSON.stringify(result, null, 2)}\n`);
     completed = true;
-    return { artifactDirectory, previewPng, animation, frameCount };
+    return result;
   } finally {
     if (browserDeadline) clearTimeout(browserDeadline);
     await Promise.allSettled([browser?.close(), host?.close()]);
