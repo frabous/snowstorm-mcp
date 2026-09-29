@@ -3,5 +3,12 @@ dist/
 release/
 .snowstorm-mcp/
 snowstorm-mcp.config.json
+snowstorm-mcp.config.*.json
+snowstorm-mcp.config.json.*
+snowstorm-mcp.*.config.json
+!snowstorm-mcp.config.example.json
+!snowstorm-mcp.config.schema.json
+PLAN-AMELIORATION.md
+RAPPORT-MCP.md
 test-results/
 playwright-report/
