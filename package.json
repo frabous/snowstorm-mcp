@@ -1,12 +1,36 @@
 {
   "name": "snowstorm-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Blockbuster-safe Snowstorm MCP server and Windows editor",
   "type": "module",
   "main": "dist/desktop/main.js",
+  "bin": {
+    "snowstorm-mcp": "dist/mcp.js"
+  },
+  "files": [
+    "dist/",
+    "vendor/snowstorm/dist/",
+    "vendor/snowstorm/assets/",
+    "vendor/snowstorm/content/",
+    "vendor/snowstorm/index.html",
+    "vendor/snowstorm/manifest.webmanifest",
+    "vendor/snowstorm/service_worker.js",
+    "vendor/snowstorm/favicon.ico",
+    "vendor/snowstorm/icon.png",
+    "vendor/snowstorm/icon_full.png",
+    "vendor/snowstorm/LICENSE",
+    "snowstorm-mcp.config.schema.json",
+    "snowstorm-mcp.config.example.json",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
   "license": "GPL-3.0-or-later",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "start": "tsx src/mcp.ts",
     "desktop": "npm run build && electron .",
     "test": "vitest run",

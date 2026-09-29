@@ -1,6 +1,7 @@
 import { access, mkdir, readFile } from "node:fs/promises";
 import { constants, existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { sha256 } from "./safe-file.js";
 import type { ProjectConfig } from "./types.js";
 
@@ -294,6 +295,7 @@ export function snowstormRoot(projectRoot: string): string {
   if (process.env.SNOWSTORM_MCP_SNOWSTORM_ROOT) {
     return path.resolve(process.env.SNOWSTORM_MCP_SNOWSTORM_ROOT);
   }
+  const projectVendor = path.join(projectRoot, "vendor", "snowstorm");
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   if (resourcesPath) {
     const normalized = resourcesPath.replaceAll("\\", "/");
@@ -303,6 +305,9 @@ export function snowstormRoot(projectRoot: string): string {
         return packaged;
       }
     }
+    return projectVendor;
   }
-  return path.join(projectRoot, "vendor", "snowstorm");
+  if (existsSync(projectVendor)) return projectVendor;
+  const packageVendor = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "vendor", "snowstorm");
+  return existsSync(packageVendor) ? packageVendor : projectVendor;
 }

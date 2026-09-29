@@ -161,4 +161,22 @@ describe("particle store", () => {
       }
     }
   });
+
+  it("resolves the packaged Snowstorm bundle when a consumer config is outside the npm package", () => {
+    const previousRoot = process.env.SNOWSTORM_MCP_SNOWSTORM_ROOT;
+    const previousResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+    try {
+      delete process.env.SNOWSTORM_MCP_SNOWSTORM_ROOT;
+      delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+      expect(snowstormRoot(path.join(os.tmpdir(), "consumer-project"))).toBe(path.join(process.cwd(), "vendor", "snowstorm"));
+    } finally {
+      if (previousRoot === undefined) delete process.env.SNOWSTORM_MCP_SNOWSTORM_ROOT;
+      else process.env.SNOWSTORM_MCP_SNOWSTORM_ROOT = previousRoot;
+      if (previousResourcesPath === undefined) {
+        delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+      } else {
+        (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = previousResourcesPath;
+      }
+    }
+  });
 });

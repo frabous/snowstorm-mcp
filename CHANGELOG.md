@@ -2,6 +2,18 @@
 
 Notable changes to Snowstorm MCP are documented here.
 
+## [0.3.0] - 2026-09-29
+
+### Added
+
+- Added the `snowstorm-mcp` executable for npm/npx use.
+- Added an npm package file allowlist so local project configs, audit notes and reports are excluded from the published tarball.
+
+### Changed
+
+- Resolve the bundled Snowstorm runtime relative to the installed MCP package when the consumer project is outside the source checkout.
+- Document npx-based configuration for Claude Code, Codex CLI and OpenCode.
+
 ## [0.2.0] - 2026-09-29
 
 ### Added
