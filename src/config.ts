@@ -138,7 +138,7 @@ async function loadProjectConfig(
   }
   const sharedTextureBanks = sharedTextureBanksRaw?.map((bank, index) =>
     resolveValue(configDirectory, bank, `sharedTextureBanks[${index}]`)
-  ) ?? [path.resolve(configDirectory, "..", "library", "textures")];
+  ) ?? [];
   if (raw.projectName !== undefined && typeof raw.projectName !== "string") {
     throw new Error(`'projectName' for project '${projectKey}' must be a string.`);
   }

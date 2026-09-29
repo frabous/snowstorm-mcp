@@ -45,6 +45,8 @@ npm run build
 npm test
 ```
 
+GitHub's **Download ZIP** does not include the `vendor/snowstorm` submodule, which is required by the preview and editor. Clone with the command above. If you already cloned without submodules, run `git submodule update --init --recursive` from the repository root.
+
 Edit `snowstorm-mcp.config.json` so its paths target your package. The provided local configuration is intentionally ignored by Git; it may point to a private Minecraft instance.
 
 The legacy flat configuration describes one project and continues to work. To switch projects without restarting, use the registry format below. Adding or changing project definitions on disk requires a restart; selecting one of the already configured projects does not.
@@ -61,7 +63,13 @@ my-package/
 
 ## MCP Client Configuration
 
-The npm package provides a `snowstorm-mcp` executable for local stdio. After version `0.3.0` is published, clients can launch it with `npx --yes snowstorm-mcp@0.3.0`; set `SNOWSTORM_MCP_CONFIG` to the absolute path of the selected project configuration. For a source checkout, use `node <repository>/dist/mcp.js` instead.
+The npm package provides a `snowstorm-mcp` executable for local stdio. After version `0.3.0` is published, clients can launch it with `npx --yes snowstorm-mcp@0.3.0`; set `SNOWSTORM_MCP_CONFIG` to the absolute path of the selected project configuration. If unset, the server looks for `snowstorm-mcp.config.json` in the MCP process's current working directory. For a source checkout, use `node <repository>/dist/mcp.js` instead.
+
+The npm/npx installation does not download Playwright's Chromium browser automatically. Install the matching browser once with the Playwright version pinned by this package:
+
+```powershell
+npm exec --yes --package=playwright@1.63.0 -- playwright install chromium
+```
 
 ### Claude Code
 
@@ -121,14 +129,14 @@ Work through these steps and report what you did:
 1. Inspect the operating system, shell, repository, existing MCP configuration files, and installed client versions. Use each client's current official documentation for its exact config location, command syntax, scope and verification command. Do not assume that another client's JSON format applies. This project documents Windows support; if the OS is different, explain the MCP-only limitations before proceeding.
 2. Check Node.js (version 22.12 or newer), npm, FFmpeg and FFprobe availability, and check Git if cloning the repository or restoring submodules is needed. Check whether project dependencies are installed, Playwright's Chromium is available, and `dist/mcp.js` exists. Install missing prerequisites using the operating system's trusted package manager or official sources, then verify each command is available. If an install needs administrator privileges or a permanent PATH change, explain the exact action and ask me before proceeding; do not silently skip it.
 3. Inspect `snowstorm-mcp.config.schema.json` and the package layout. Ask me for any missing or ambiguous particle, resource-pack, selector, instance-selector, spell or artifact paths. Never invent project paths. Keep secrets out of files, logs and chat.
-4. Create or update `snowstorm-mcp.config.json` only after showing me the proposed values. Use the legacy flat format for one project or the registry format for several projects. Keep every path valid. Use `../library/textures` as the default shared texture bank when that matches this repository layout; preserve an explicit `sharedTextureBanks` list or `[]` if I have one. Set `instanceSelectorsFile` only to the real instance selectors file.
-5. Follow the Installation section's commands for any missing local setup: run `npm install`, `npx install-electron` and `npx playwright install chromium` as needed. Then run `npm run build` and `npm test`, and fix setup-related failures before continuing. Do not run any tool that writes particles, selectors, textures or other game assets during setup.
+4. Create or update `snowstorm-mcp.config.json` only after showing me the proposed values. Use the legacy flat format for one project or the registry format for several projects. Keep every path valid. Add `../library/textures` to `sharedTextureBanks` only when that directory exists in this layout; otherwise use `[]`. Preserve an explicit `sharedTextureBanks` list if I have one. Set `instanceSelectorsFile` only to the real instance selectors file.
+5. Follow the Installation section's commands for any missing local setup: run `npm install` and, for a source checkout, `npx install-electron` as needed. Install Chromium with the matching command above (`npx playwright install chromium` in a source checkout, or the pinned `npm exec --yes --package=playwright@1.63.0 -- playwright install chromium` command for npm/npx use). Then run `npm run build` and `npm test`, and fix setup-related failures before continuing. Do not run any tool that writes particles, selectors, textures or other game assets during setup.
 6. Check whether `snowstorm-mcp@0.3.0` is available on npm. If so, configure the local stdio command as `npx --yes snowstorm-mcp@0.3.0`; otherwise use `node <absolute-repository-path>/dist/mcp.js` from the existing checkout and tell me the npm release is not published yet. Set `SNOWSTORM_MCP_CONFIG` to the absolute config path. For each approved client, merge one server entry without removing or rewriting unrelated settings. Choose user/global or project/local scope only after checking the client's behavior and confirming my preference. Back up an existing client config before editing it.
 7. Start a fresh client session and use that client's documented MCP status/list command. Verify the server exposes its tools, call `project_list`, then run `particle_list` only if the selected project path is valid. Do not call a mutating tool as a connection test.
 8. Summarize configured clients and scopes, files changed, exact verification results, and any remaining issue. Leave private per-machine config files uncommitted.
 ```
 
-The npx-installed server includes Snowstorm for rendering. `particle_open_desktop` additionally requires Electron installed in the project checkout; use the source installation above for the Electron editor.
+The npx-installed server includes Snowstorm for rendering but does not bundle Electron. `particle_open_desktop` requires the source checkout with Electron installed in the MCP repository. The project configuration may remain in a separate Minecraft project directory.
 
 ## Project Registry and Shared Texture Banks
 
@@ -138,7 +146,7 @@ The flat configuration remains supported for one project. For several projects, 
 {
   "$schema": "./snowstorm-mcp.config.schema.json",
   "activeProject": "spell-a",
-  "sharedTextureBanks": ["../library/textures"],
+  "sharedTextureBanks": [],
   "projects": {
     "spell-a": {
       "projectName": "spell-a",
@@ -161,7 +169,7 @@ The flat configuration remains supported for one project. For several projects, 
 }
 ```
 
-Use `project_list` to see configured keys and the active project, then `project_use` to switch immediately. Add `instanceSelectorsFile` when `selectors_merge` should default to the real instance selectors file; a live merge requires `write: true`, `dryRun: false` and the inspected SHA-256 digest. If `sharedTextureBanks` is omitted, the server resolves the recommended `../library/textures` path relative to the configuration file. Set it to `[]` to disable shared banks.
+Use `project_list` to see configured keys and the active project, then `project_use` to switch immediately. Add `instanceSelectorsFile` when `selectors_merge` should default to the real instance selectors file; a live merge requires `write: true`, `dryRun: false` and the inspected SHA-256 digest. Omitted `sharedTextureBanks` defaults to no shared banks. When needed, configure each bank explicitly; paths are relative to the configuration file, and `../library/textures` is only appropriate when that directory exists in your layout.
 
 `texture_generate` writes to the project resource pack unless a configured bank is selected. `texture_import` copies a PNG into a configured bank. `texture_list` shows the winning source and particles using each texture; project textures take precedence over shared-bank duplicates.
 

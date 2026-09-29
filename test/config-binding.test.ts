@@ -43,10 +43,10 @@ async function registryOnDisk(root: string, sharedTextureBanks?: string[]) {
 }
 
 describe("configuration binding", () => {
-  it("defaults the shared texture bank to the selected sibling library location", async () => {
+  it("defaults to no shared texture banks when omitted from a flat config", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-config-"));
     const config = await loadConfig(await configOnDisk(root));
-    expect(config.sharedTextureBanks).toEqual([path.resolve(root, "..", "library", "textures")]);
+    expect(config.sharedTextureBanks).toEqual([]);
   });
 
   it("keeps a legacy flat config as one implicit project named by projectName", async () => {
@@ -121,15 +121,14 @@ describe("configuration binding", () => {
     await expect(ProjectRegistry.load(configPath)).rejects.toThrow(message);
   });
 
-  it("defaults omitted registry banks relative to the registry file for every selected project", async () => {
+  it("defaults omitted registry banks to none for every selected project", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-config-"));
     const registry = await ProjectRegistry.load(await registryOnDisk(root));
-    const expectedBank = [path.resolve(root, "..", "library", "textures")];
-    expect(registry.currentConfig.sharedTextureBanks).toEqual(expectedBank);
-    expect((await registry.use("alpha")).sharedTextureBanks).toEqual(expectedBank);
+    expect(registry.currentConfig.sharedTextureBanks).toEqual([]);
+    expect((await registry.use("alpha")).sharedTextureBanks).toEqual([]);
   });
 
-  it("allows an explicit empty shared texture bank list to disable the default", async () => {
+  it("allows an explicit empty shared texture bank list", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-config-"));
     const configPath = await registryOnDisk(root, []);
     expect((await loadConfig(configPath)).sharedTextureBanks).toEqual([]);
@@ -139,7 +138,7 @@ describe("configuration binding", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-config-"));
     const config = await loadConfig(await configOnDisk(root));
     expect(config.configDigest).toBeTruthy();
-    expect(config.sharedTextureBanks).toEqual([path.resolve(root, "..", "library", "textures")]);
+    expect(config.sharedTextureBanks).toEqual([]);
     expect(() => assertConfigCurrent(config)).not.toThrow();
   });
 
