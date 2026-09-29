@@ -1,5 +1,5 @@
 import type { JsonObject, JsonValue, ProjectConfig, TextureMetadata, ValidationIssue, ValidationResult } from "./types.js";
-import { summarizeParticle } from "./particle-store.js";
+import { numericLiteral, summarizeParticle } from "./particle-store.js";
 import { inspectTexture, particleTexture } from "./texture.js";
 
 const materials = new Set(["particles_alpha", "particles_blend", "particles_add", "particles_opaque"]);
@@ -79,8 +79,8 @@ export function particleTiming(document: JsonObject): { emitterSeconds: number |
   const looping = isObject(components["minecraft:emitter_lifetime_looping"]) ? components["minecraft:emitter_lifetime_looping"] : undefined;
   const lifetime = isObject(components["minecraft:particle_lifetime_expression"]) ? components["minecraft:particle_lifetime_expression"] : undefined;
   return {
-    emitterSeconds: finiteNumber(once?.active_time) ?? finiteNumber(looping?.active_time),
-    particleSeconds: finiteNumber(lifetime?.max_lifetime)
+    emitterSeconds: numericLiteral(once?.active_time) ?? numericLiteral(looping?.active_time),
+    particleSeconds: numericLiteral(lifetime?.max_lifetime)
   };
 }
 

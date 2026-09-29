@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { requirePathInside, snowstormRoot } from "../src/config.js";
-import { applyPatch, mergeSnowstormExport, summarizeParticle } from "../src/particle-store.js";
+import { applyPatch, looksLikeNumericString, mergeSnowstormExport, numericLiteral, summarizeParticle } from "../src/particle-store.js";
 import { resolveTexturePath } from "../src/texture.js";
 import { designBrief } from "../src/authoring-guide.js";
 import { formatTimecode, parseTimecode } from "../src/video.js";
@@ -36,6 +36,30 @@ describe("particle store", () => {
   it("rejects prototype-mutating JSON pointers", () => {
     expect(() => applyPatch(original, [{ op: "add", path: "/particle_effect/components/__proto__/minecraft:emitter_rate_instant", value: {} }])).toThrow("Unsafe JSON pointer");
     expect(Object.hasOwn({}, "minecraft:emitter_rate_instant")).toBe(false);
+  });
+
+  it("refuses to downgrade a numeric field to a bare numeric string", () => {
+    const path = "/particle_effect/components/minecraft:emitter_rate_instant/num_particles";
+    expect(() => applyPatch(original, [{ op: "replace", path, value: "12" }])).toThrow("Refusing to replace the number 1");
+    expect(() => applyPatch(original, [{ op: "replace", path, value: "12.0" }])).toThrow("Refusing to replace the number 1");
+    expect(() => applyPatch(original, [{ op: "replace", path, value: 12 }])).not.toThrow();
+  });
+
+  it("still accepts a real Molang expression over a numeric field", () => {
+    const path = "/particle_effect/components/minecraft:emitter_rate_instant/num_particles";
+    const patched = applyPatch(original, [{ op: "replace", path, value: "math.floor(4.0 * math.sin(1.0))" }]);
+    const components = (patched.particle_effect as JsonObject).components as JsonObject;
+    expect((components["minecraft:emitter_rate_instant"] as JsonObject).num_particles).toBe("math.floor(4.0 * math.sin(1.0))");
+  });
+
+  it("reads a bare numeric string as a bounded literal", () => {
+    expect(numericLiteral(9)).toBe(9);
+    expect(numericLiteral("9")).toBe(9);
+    expect(numericLiteral(" 9.0 ")).toBe(9);
+    expect(numericLiteral("math.sin(1.0)")).toBeNull();
+    expect(numericLiteral("9 + variable.particle_age")).toBeNull();
+    expect(looksLikeNumericString("9")).toBe(true);
+    expect(looksLikeNumericString(9)).toBe(false);
   });
 
   it("rejects particle documents beyond the nesting limit", () => {

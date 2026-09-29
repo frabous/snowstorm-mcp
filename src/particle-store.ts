@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { cp, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { requireResolvedPathInside } from "./config.js";
+import { requireResolvedPathInside, assertConfigCurrent, describeConfigBinding } from "./config.js";
 import { sha256, withFileLocks } from "./safe-file.js";
 import type { JsonObject, JsonPatchOperation, JsonValue, ParticleSummary, ProjectConfig } from "./types.js";
 
@@ -91,11 +91,45 @@ export function valueAt(document: JsonValue, pointer: string): JsonValue | undef
   return current;
 }
 
+/**
+ * A bare numeric string is a valid Molang expression, so it survives every semantic
+ * check while no longer being a literal number. MCP clients may also send a number as a
+ * JSON string and `z.unknown()` will not second-guess it, so these two helpers are the
+ * only way to tell an authored expression from a client-side type downgrade.
+ */
+const numericLiteralPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+export function looksLikeNumericString(value: JsonValue | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0 && numericLiteralPattern.test(value.trim());
+}
+
+export function numericLiteral(value: JsonValue | undefined): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (!looksLikeNumericString(value)) return null;
+  const parsed = Number((value as string).trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Refused at the only point where the previous value is still known: once written, a
+ * downgraded field looks like a legitimate Molang expression and the corruption only
+ * surfaces much later as a scene-render refusal.
+ */
+function assertNoNumberDowngrade(document: JsonObject, operation: JsonPatchOperation): void {
+  if (operation.op !== "replace" || !looksLikeNumericString(operation.value)) return;
+  const existing = valueAt(document, operation.path);
+  if (typeof existing !== "number") return;
+  throw new Error(
+    `Refusing to replace the number ${existing} at ${operation.path} with the string ${JSON.stringify(operation.value)}. Send a JSON number, or a Molang expression that is not a bare numeric literal.`
+  );
+}
+
 export function applyPatch(document: JsonObject, operations: JsonPatchOperation[]): JsonObject {
   assertJsonWithinLimits(document, "Particle document");
   for (const operation of operations) if (operation.value !== undefined) assertJsonWithinLimits(operation.value, `Patch value at ${operation.path}`);
   const output = clone(document);
   for (const operation of operations) {
+    assertNoNumberDowngrade(output, operation);
     const { parent, key } = parentAt(output, operation.path);
     if (operation.op === "test") {
       if (JSON.stringify(valueAt(output, operation.path)) !== JSON.stringify(operation.value)) {
@@ -161,7 +195,12 @@ export class ParticleStore {
 
   resolve(file: string): string {
     if (!file.endsWith(".particle.json")) throw new Error("Particle files must end with .particle.json.");
-    return requireResolvedPathInside(this.config.particlesRoot, file);
+    assertConfigCurrent(this.config);
+    try {
+      return requireResolvedPathInside(this.config.particlesRoot, file);
+    } catch (error) {
+      throw new Error(`${String(error)} ${describeConfigBinding(this.config)}`);
+    }
   }
 
   async list(): Promise<ParticleSummary[]> {

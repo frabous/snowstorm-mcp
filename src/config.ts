@@ -1,6 +1,7 @@
 import { access, mkdir, readFile } from "node:fs/promises";
-import { constants, existsSync, realpathSync } from "node:fs";
+import { constants, existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { sha256 } from "./safe-file.js";
 import type { ProjectConfig } from "./types.js";
 
 interface RawConfig {
@@ -36,9 +37,11 @@ export async function loadConfig(configPath?: string): Promise<ProjectConfig> {
   const resolvedConfigPath = resolveConfigPath(configPath);
   const configDirectory = path.dirname(resolvedConfigPath);
   let raw: RawConfig;
+  let rawText: string;
 
   try {
-    raw = JSON.parse(await readFile(resolvedConfigPath, "utf8")) as RawConfig;
+    rawText = await readFile(resolvedConfigPath, "utf8");
+    raw = JSON.parse(rawText) as RawConfig;
   } catch (error) {
     throw new Error(`Unable to load Snowstorm MCP configuration at ${resolvedConfigPath}: ${String(error)}`);
   }
@@ -49,6 +52,7 @@ export async function loadConfig(configPath?: string): Promise<ProjectConfig> {
     : path.join(artifactsRoot, "reference-videos");
   const config: ProjectConfig = {
     configPath: resolvedConfigPath,
+    configDigest: sha256(rawText),
     projectName: raw.projectName ?? "snowstorm-project",
     particlesRoot: resolveValue(configDirectory, raw.particlesRoot, "particlesRoot"),
     resourcePackRoot: resolveValue(configDirectory, raw.resourcePackRoot, "resourcePackRoot"),
@@ -67,6 +71,24 @@ export async function loadConfig(configPath?: string): Promise<ProjectConfig> {
     requirePath(config.spellFile, "spellFile")
   ]);
   return config;
+}
+
+export function assertConfigCurrent(config: ProjectConfig): void {
+  if (!config.configDigest) return;
+  let current: string;
+  try {
+    current = readFileSync(config.configPath, "utf8");
+  } catch {
+    return;
+  }
+  if (sha256(current) === config.configDigest) return;
+  throw new Error(
+    `${config.configPath} changed on disk. This server is still bound to project '${config.projectName}' (particles root ${config.particlesRoot}). Restart the MCP server to load the new configuration.`
+  );
+}
+
+export function describeConfigBinding(config: ProjectConfig): string {
+  return `Server is bound to project '${config.projectName}' (particles root ${config.particlesRoot}).`;
 }
 
 export function requirePathInside(root: string, requestedPath: string): string {

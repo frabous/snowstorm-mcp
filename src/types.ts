@@ -4,6 +4,7 @@ export type JsonObject = { [key: string]: JsonValue };
 
 export interface ProjectConfig {
   configPath: string;
+  configDigest?: string;
   projectName: string;
   particlesRoot: string;
   resourcePackRoot: string;
