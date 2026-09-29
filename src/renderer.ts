@@ -1,6 +1,4 @@
-import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { chromium } from "playwright";
 import type { ParticleStore } from "./particle-store.js";
@@ -9,6 +7,9 @@ import { startSnowstormHost } from "./snowstorm-host.js";
 import { snowstormRoot } from "./config.js";
 import { inspectTexture, particleTexture, resolveTexturePath } from "./texture.js";
 import { enforceRenderBudget } from "./scene-renderer.js";
+import { artifactDirectoryPath } from "./artifact-path.js";
+import { projectRoot } from "./project-path.js";
+import { runFfmpeg } from "./process-utils.js";
 
 export interface RenderOptions {
   file: string;
@@ -27,29 +28,11 @@ export interface RenderResult {
   report: string;
 }
 
-function projectRoot(config: ProjectConfig): string {
-  return path.dirname(config.configPath);
-}
-
 async function resolveTextureDataUrl(document: Record<string, unknown>, config: ProjectConfig): Promise<string | undefined> {
   const texture = particleTexture(document as JsonObject);
   if (typeof texture !== "string") return undefined;
   await inspectTexture(texture, config);
   return `data:image/png;base64,${(await readFile(resolveTexturePath(texture, config))).toString("base64")}`;
-}
-
-async function runFfmpeg(args: string[]): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("ffmpeg", ["-y", ...args], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-    let error = "";
-    const timeout = setTimeout(() => child.kill(), 120_000);
-    child.stderr.on("data", (chunk: Buffer) => { error = `${error}${chunk.toString()}`.slice(-16_384); });
-    child.once("error", (failure) => { clearTimeout(timeout); reject(failure); });
-    child.once("exit", (code) => {
-      clearTimeout(timeout);
-      code === 0 ? resolve() : reject(new Error(`ffmpeg failed (${code}): ${error.slice(-1000)}`));
-    });
-  });
 }
 
 export async function renderParticle(store: ParticleStore, config: ProjectConfig, options: RenderOptions): Promise<RenderResult> {
@@ -63,7 +46,7 @@ export async function renderParticle(store: ParticleStore, config: ProjectConfig
   enforceRenderBudget(source.document, options.file, durationSeconds);
   const frameCount = Math.max(1, Math.round(durationSeconds * fps));
   if (frameCount > 300) throw new Error("Render is limited to 300 frames to protect local disk and CPU.");
-  const artifactDirectory = path.join(config.artifactsRoot, "renders", `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`);
+  const artifactDirectory = artifactDirectoryPath(config.artifactsRoot, "renders");
   await mkdir(artifactDirectory, { recursive: true });
   let host: Awaited<ReturnType<typeof startSnowstormHost>> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;

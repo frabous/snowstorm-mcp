@@ -3,15 +3,16 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import type { ParticleStore } from "./particle-store.js";
 import type { ProjectConfig } from "./types.js";
+import { projectRoot } from "./project-path.js";
 
 export async function openDesktop(store: ParticleStore, config: ProjectConfig, file: string): Promise<{ pid: number }> {
   const target = store.resolve(file);
   await access(target);
-  const projectRoot = path.dirname(config.configPath);
-  const executable = path.join(projectRoot, "node_modules", ".bin", process.platform === "win32" ? "electron.cmd" : "electron");
+  const root = projectRoot(config);
+  const executable = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "electron.cmd" : "electron");
   await access(executable);
-  const child = spawn(executable, [projectRoot, target], {
-    cwd: projectRoot,
+  const child = spawn(executable, [root, target], {
+    cwd: root,
     detached: true,
     stdio: "ignore",
     windowsHide: false

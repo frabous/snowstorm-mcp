@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { JsonObject, JsonValue, ProjectConfig, TimelineLayer, ValidationIssue } from "./types.js";
-import { ParticleStore } from "./particle-store.js";
+import { ParticleBomError, ParticleStore } from "./particle-store.js";
 import { helperDetails, inspectSpellTimeline } from "./magicspells.js";
 import { particleTiming, validateParticle } from "./validator.js";
 
@@ -73,6 +73,7 @@ export async function validatePackage(
   const files = await store.listFiles();
   const particles = new Map<string, JsonObject>();
   const identifiers = new Map<string, string>();
+  const unreadableBomFiles = new Set<string>();
   let particleWarnings = 0;
   for (const file of files) {
     try {
@@ -90,14 +91,19 @@ export async function validatePackage(
         else identifiers.set(identifier, file);
       }
     } catch (error) {
-      push(issues, "error", "particle-json", `${file}: ${String(error)}`);
+      if (error instanceof ParticleBomError) {
+        unreadableBomFiles.add(file);
+        push(issues, "error", "bom", error.message, file);
+      } else {
+        push(issues, "error", "particle-json", `${file}: ${String(error)}`);
+      }
     }
   }
   for (const selector of selectors) {
     const file = `${selector.scheme}.json`;
-    if (!particles.has(file)) push(issues, "error", "selector-scheme-missing", `Selector '${selector.name}' targets missing particle '${file}'.`);
+    if (!particles.has(file) && !unreadableBomFiles.has(file)) push(issues, "error", "selector-scheme-missing", `Selector '${selector.name}' targets missing particle '${file}'.`);
   }
-  for (const file of files) if (!selectorsByFile.has(file)) push(issues, "error", "particle-orphan", `Particle '${file}' has no selector.`);
+  for (const file of files) if (!selectorsByFile.has(file) && !unreadableBomFiles.has(file)) push(issues, "error", "particle-orphan", `Particle '${file}' has no selector.`);
 
   const spell = await inspectSpellTimeline(config, options.mainSpell, options.ticksPerSecond ?? 20);
   issues.push(...spell.issues);
@@ -150,7 +156,13 @@ export async function validatePackage(
     valid: errors.length === 0,
     mainSpell: spell.mainSpell,
     ticksPerSecond: spell.ticksPerSecond,
-    counts: { particles: files.length, selectors: selectors.length, helpers: new Set(spell.occurrences.map((entry) => entry.helper)).size, scheduledLayers: layers.length },
+    counts: {
+      particles: files.length,
+      selectors: selectors.length,
+      helpers: new Set(spell.occurrences.map((entry) => entry.helper)).size,
+      gameplayHelpers: new Set(layers.filter((layer) => layer.anchor === "non_emitter").map((layer) => layer.helper)).size,
+      scheduledLayers: layers.length
+    },
     errors,
     warnings,
     warningCount: warnings.length,

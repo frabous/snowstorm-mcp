@@ -1,7 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { chromium, type Page } from "playwright";
 import type { JsonObject, JsonPatchOperation, ProjectConfig, TimelineLayer } from "./types.js";
 import type { ParticleStore } from "./particle-store.js";
@@ -11,6 +10,9 @@ import { startSnowstormHost } from "./snowstorm-host.js";
 import { snowstormRoot } from "./config.js";
 import { validatePackage } from "./package-validator.js";
 import { particleTiming, validateParticle } from "./validator.js";
+import { artifactDirectoryPath } from "./artifact-path.js";
+import { projectRoot } from "./project-path.js";
+import { runFfmpeg } from "./process-utils.js";
 
 export const MAX_SCENE_FRAMES = 750;
 export const MAX_SCENE_RENDERED_PIXELS = 480_000_000;
@@ -69,10 +71,6 @@ export function enforceSceneFrameBudget(frameCount: number, width: number, heigh
   }
 }
 
-function projectRoot(config: ProjectConfig): string {
-  return path.dirname(config.configPath);
-}
-
 export function cameraForTime(
   shots: SceneShot[] | undefined,
   time: number,
@@ -102,23 +100,6 @@ export function deriveSampleTimes(
   const thinned: number[] = [];
   for (let index = 0; index < limit; index += 1) thinned.push(inside[Math.round(index * (inside.length - 1) / (limit - 1))]!);
   return [...new Set(thinned)];
-}
-
-function runFfmpeg(args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", ["-y", ...args], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-    let error = "";
-    const timeout = setTimeout(() => child.kill(), 120_000);
-    child.stderr.on("data", (chunk: Buffer) => { error = `${error}${chunk.toString()}`.slice(-16_384); });
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timeout);
-      code === 0 ? resolve() : reject(new Error(`ffmpeg failed (${code}): ${error.slice(-1000)}`));
-    });
-  });
 }
 
 interface FrameEncoder {
@@ -196,7 +177,12 @@ export function enforceRenderBudget(document: JsonObject, file: string, lifetime
     // A bare numeric string is still a bounded Molang literal, so accept it rather than
     // refusing to render a file that is semantically fine.
     const literal = numericLiteral(value);
-    if (literal === null) throw new Error(`${file} uses expression-valued ${name}, which cannot be bounded for scene rendering.`);
+    if (literal === null) {
+      if (name === "spawn_rate") {
+        throw new Error(`${file} uses expression-valued spawn_rate, which is unsupported for particle_render_scene scene bounds. Use a numeric spawn_rate, or size the render envelope based on particle size and alpha only.`);
+      }
+      throw new Error(`${file} uses expression-valued ${name}, which cannot be bounded for scene rendering.`);
+    }
     bounded.set(name, literal);
   }
   const instantCount = bounded.get("num_particles") ?? 0;
@@ -299,7 +285,7 @@ export async function renderScene(store: ParticleStore, config: ProjectConfig, o
     return total + Math.ceil(source.lifetime * 30) * source.maximumParticles;
   }, 0);
   if (aggregateParticleTicks > 5_000_000) throw new Error("Scene exceeds the aggregate 5,000,000 particle-tick simulation budget.");
-  const artifactDirectory = path.join(config.artifactsRoot, "scenes", `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`);
+  const artifactDirectory = artifactDirectoryPath(config.artifactsRoot, "scenes");
   await mkdir(artifactDirectory, { recursive: true });
   let host: Awaited<ReturnType<typeof startSnowstormHost>> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;

@@ -1,23 +1,33 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
-import { loadConfig } from "./config.js";
-import { buildTextureSheet } from "./texture.js";
+import { ProjectRegistry } from "./config.js";
+import {
+  buildTextureSheet,
+  generateTextureAsset,
+  importTextureAsset,
+  listTextures,
+  textureFlipbookAtlas
+} from "./texture.js";
 import { openDesktop } from "./desktop-launcher.js";
-import { applyPatch, assertJsonWithinLimits, ParticleStore, summarizeParticle } from "./particle-store.js";
+import { applyPatch, assertJsonWithinLimits, ParticleBomError, ParticleStore, summarizeParticle } from "./particle-store.js";
 import { renderParticle } from "./renderer.js";
 import { renderScene } from "./scene-renderer.js";
 import { createTemplate, templateNames } from "./templates.js";
-import type { JsonObject, JsonPatchOperation, JsonValue } from "./types.js";
+import type { JsonObject, JsonPatchOperation } from "./types.js";
 import { validateParticle } from "./validator.js";
 import { validatePackage } from "./package-validator.js";
 import { patchParticlesBatch, queryParticles } from "./particle-service.js";
 import { inspectSpellTimeline, retimeSpell } from "./magicspells.js";
+import { mergeSelectors } from "./selectors-merge.js";
 import { probeParticle } from "./molang-probe.js";
 import { authoringGuideFor, authoringTopics, designBrief } from "./authoring-guide.js";
 import { VideoAnalyzer } from "./video.js";
 import { sceneCameraSchema } from "./input-schema.js";
+import { TEXTURE_PRIMITIVES } from "./texture-generator.js";
 
 function asObject(value: unknown, name: string): JsonObject {
   if (!value || Array.isArray(value) || typeof value !== "object") throw new Error(`${name} must be a JSON object.`);
@@ -26,6 +36,58 @@ function asObject(value: unknown, name: string): JsonObject {
 
 function jsonResult(value: unknown, isError = false) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value) }], isError };
+}
+
+class ProjectSwitchGate {
+  private readers = 0;
+  private writer = false;
+  private readonly queue: Array<{ mode: "read" | "write"; resolve: () => void }> = [];
+
+  async withRead<T>(operation: () => T | Promise<T>): Promise<T> {
+    await this.acquire("read");
+    try {
+      return await operation();
+    } finally {
+      this.release("read");
+    }
+  }
+
+  async withWrite<T>(operation: () => T | Promise<T>): Promise<T> {
+    await this.acquire("write");
+    try {
+      return await operation();
+    } finally {
+      this.release("write");
+    }
+  }
+
+  private acquire(mode: "read" | "write"): Promise<void> {
+    if (mode === "read" && !this.writer && !this.queue.some((waiter) => waiter.mode === "write")) {
+      this.readers += 1;
+      return Promise.resolve();
+    }
+    if (mode === "write" && !this.writer && this.readers === 0 && this.queue.length === 0) {
+      this.writer = true;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => this.queue.push({ mode, resolve }));
+  }
+
+  private release(mode: "read" | "write"): void {
+    if (mode === "read") this.readers -= 1;
+    else this.writer = false;
+    if (this.writer || this.readers > 0 || this.queue.length === 0) return;
+
+    if (this.queue[0]!.mode === "write") {
+      this.writer = true;
+      this.queue.shift()!.resolve();
+      return;
+    }
+    while (this.queue[0]?.mode === "read") {
+      this.readers += 1;
+      this.queue.shift()!.resolve();
+    }
+  }
 }
 
 const patchOperationSchema = z.discriminatedUnion("op", [
@@ -43,16 +105,49 @@ const boundedBindingsSchema = z.record(z.string().max(64), z.string().max(512)).
 const boundedSelectionSchema = z.record(z.string().max(64), z.string().max(512)).refine((value) => Object.keys(value).length <= 32, "At most 32 selected fields are allowed.");
 const particleDocumentSchema = z.record(z.string().max(256), z.unknown());
 
-async function createMcpServer(): Promise<McpServer> {
-  const config = await loadConfig();
-  const store = new ParticleStore(config);
-  const videos = new VideoAnalyzer(config);
+export async function createMcpServer(configPath?: string): Promise<McpServer> {
+  const registry = await ProjectRegistry.load(configPath);
+  let config = registry.currentConfig;
+  let store = new ParticleStore(config);
+  let videos = new VideoAnalyzer(config);
   const server = new McpServer(
-    { name: "snowstorm-mcp", version: "0.1.0" },
+    { name: "snowstorm-mcp", version: "0.2.0" },
     {
       instructions: "Create and edit Minecraft Blockbuster 1.12 particle JSON safely. Inspect before editing. Do not remove blockbuster:* components unless explicitly requested. Rendered images prove Snowstorm's preview only, never Minecraft playback."
     }
   );
+  const switchGate = new ProjectSwitchGate();
+  const registerTool = new Proxy(server.registerTool.bind(server), {
+    apply(target, thisArg, args: unknown[]) {
+      const [name, config, handler] = args as [string, unknown, (...handlerArgs: unknown[]) => unknown];
+      const guardedHandler = (...handlerArgs: unknown[]) => name === "project_use"
+        ? switchGate.withWrite(() => handler.apply(thisArg, handlerArgs))
+        : switchGate.withRead(async () => {
+          registry.assertCurrent();
+          return await handler.apply(thisArg, handlerArgs);
+        });
+      return Reflect.apply(target, thisArg, [name, config, guardedHandler]);
+    }
+  });
+  server.registerTool = registerTool;
+
+  server.registerTool("project_list", {
+    description: "List configured project keys and identify the active in-memory project.",
+    inputSchema: z.object({}).default({})
+  }, async () => {
+    return jsonResult({ activeProject: registry.activeProject, projects: registry.list() });
+  });
+
+  server.registerTool("project_use", {
+    description: "Switch the active in-memory project without restarting the MCP server.",
+    inputSchema: z.object({ name: z.string().min(1).max(128) })
+  }, async ({ name }) => {
+    const nextConfig = await registry.use(name);
+    config = nextConfig;
+    store = new ParticleStore(nextConfig);
+    videos = new VideoAnalyzer(nextConfig);
+    return jsonResult({ activeProject: registry.activeProject, projectName: config.projectName, particlesRoot: config.particlesRoot });
+  });
 
   server.registerTool("particle_list", {
     description: "List particles as compact summaries: identifier, texture, standard components, and Blockbuster extensions.",
@@ -154,7 +249,17 @@ async function createMcpServer(): Promise<McpServer> {
   server.registerTool("particle_validate", {
     description: "Validate Bedrock/Snowstorm structure, Blockbuster-compatible components, texture resolution, collision assumptions, and finite lifetime risks.",
     inputSchema: z.object({ file: particleFileSchema })
-  }, async ({ file }) => jsonResult(await validateParticle(await store.read(file), config, file)));
+  }, async ({ file }) => {
+    try {
+      return jsonResult(await validateParticle(await store.read(file), config, file));
+    } catch (error) {
+      if (!(error instanceof ParticleBomError)) throw error;
+      return jsonResult({
+        valid: false,
+        issues: [{ severity: "error", code: "bom", message: error.message, path: file }]
+      }, true);
+    }
+  });
 
   server.registerTool("particle_verify_package", {
     description: "Validate the full package graph: particles, PNG/UV assets, selectors, MagicSpells helpers, cumulative timing, anchors and helper durations.",
@@ -199,6 +304,19 @@ async function createMcpServer(): Promise<McpServer> {
   }, async (options) => {
     assertJsonWithinLimits(options, "spell_retime request");
     return jsonResult(await retimeSpell(config, options));
+  });
+
+  server.registerTool("selectors_merge", {
+    description: "Merge the configured selectors.json additions fragment into an instance selectors file. Dry-run by default; conflicts are reported and never replace existing selectors. Live writes require write=true, dryRun=false, and the target's expected SHA-256 digest.",
+    inputSchema: z.object({
+      instanceFile: z.string().min(1).max(2048).optional(),
+      dryRun: z.boolean().default(true),
+      expectedDigest: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+      write: z.boolean().default(false)
+    })
+  }, async (options) => {
+    assertJsonWithinLimits(options, "selectors_merge request");
+    return jsonResult(await mergeSelectors(config, options, () => registry.assertCurrent()));
   });
 
   server.registerTool("particle_render", {
@@ -323,6 +441,74 @@ async function createMcpServer(): Promise<McpServer> {
     })
   }, async ({ role, durationSeconds, attached }) => jsonResult(designBrief(role, durationSeconds, attached)));
 
+  const textureBankSelectionSchema = z.union([
+    z.number().int().min(0).max(15),
+    z.string().min(1).max(4096)
+  ]);
+
+  server.registerTool("texture_generate", {
+    description: "Generate a named PNG texture primitive and safely persist it in the project resource pack, or in one configured shared bank (bank is a zero-based index or exact configured root). The response includes the exact address/path, SHA-256 and decoded pixel metrics (nonZeroCoverage is alpha > 0; brightCoverage is alpha-weighted luminance >= 0.1). This is a generated asset, not proof of Minecraft playback. soft_lens enforces at least 35% bright-frame coverage.",
+    inputSchema: z.object({
+      texture: z.string().min(3).max(512),
+      primitive: z.enum(TEXTURE_PRIMITIVES),
+      bank: textureBankSelectionSchema.optional(),
+      width: z.number().int().min(1).max(8192).optional(),
+      height: z.number().int().min(1).max(8192).optional(),
+      seed: z.number().int().min(0).max(0xffff_ffff).optional(),
+      tint: z.string().regex(/^#[\da-f]{6}$/i).optional(),
+      intensity: z.number().positive().max(1).optional()
+    })
+  }, async (options) => {
+    assertJsonWithinLimits(options, "texture_generate request");
+    return jsonResult(await generateTextureAsset(config, options, () => registry.assertCurrent()));
+  });
+
+  server.registerTool("texture_list", {
+    description: "Recursively catalogue project and configured shared-bank PNGs, project-first and deduplicated case-insensitively. Returns the winning source/root, shadowed sources, decoded alpha/coverage metrics (brightCoverage counts alpha-weighted luminance >= 0.1), and particles that use each texture.",
+    inputSchema: z.object({
+      nameContains: z.string().max(256).optional(),
+      minCoverage: z.number().min(0).max(1).optional(),
+      hasAlpha: z.boolean().optional(),
+      width: z.number().int().min(1).max(8192).optional(),
+      height: z.number().int().min(1).max(8192).optional(),
+      usedBy: z.string().min(1).max(512).optional(),
+      limit: z.number().int().min(1).max(200).default(60)
+    }).default({ limit: 60 })
+  }, async (filters) => {
+    assertJsonWithinLimits(filters, "texture_list request");
+    return jsonResult(await listTextures(config, await store.list(), filters));
+  });
+
+  server.registerTool("texture_import", {
+    description: "Validate and copy an external PNG into a configured shared texture bank. Select the bank by zero-based sharedTextureBanks index or exact configured root; name, when supplied, is a namespace:path texture address (otherwise imported:<source-basename> is used). Existing destinations are never overwritten.",
+    inputSchema: z.object({
+      sourcePath: z.string().min(1).max(4096),
+      bank: textureBankSelectionSchema,
+      name: z.string().min(3).max(512).optional()
+    })
+  }, async (options) => {
+    assertJsonWithinLimits(options, "texture_import request");
+    return jsonResult(await importTextureAsset(config, options, () => registry.assertCurrent()));
+  });
+
+  server.registerTool("flipbook_atlas", {
+    description: "Calculate Bedrock UV and flipbook fields from the actual dimensions of a resolved project/bank PNG; includes the winning source/root and any shadowed banks.",
+    inputSchema: z.object({
+      texture: z.string().min(3).max(512),
+      columns: z.number().int().min(1).max(8192),
+      rows: z.number().int().min(1).max(8192),
+      direction: z.enum(["horizontal", "vertical"]).default("vertical"),
+      startColumn: z.number().int().min(0).max(8191).optional(),
+      startRow: z.number().int().min(0).max(8191).optional(),
+      frameCount: z.number().int().min(1).max(65536).optional(),
+      framesPerSecond: z.number().positive().max(1000).default(10),
+      stretchToLifetime: z.boolean().default(true)
+    })
+  }, async ({ texture, ...options }) => {
+    assertJsonWithinLimits({ texture, ...options }, "flipbook_atlas request");
+    return jsonResult(await textureFlipbookAtlas(texture, config, options));
+  });
+
   server.registerTool("texture_contact_sheet", {
     description: "Render up to 16 real particle PNGs on a checkerboard with their declared dimensions, so alpha, contour and resolution can be judged before a scene render. A hard straight contour on a tile is the artwork's own alpha, not a compositing artefact; this is the only view that separates the two.",
     inputSchema: z.object({
@@ -346,7 +532,7 @@ async function createMcpServer(): Promise<McpServer> {
 
   server.registerTool("video_import", {
     description: "Copy an external video into the MCP-managed reference-video directory. Use the returned file value with video_analyze or video_extract_frames. Existing files are never overwritten.",
-    inputSchema: z.object({ sourcePath: z.string().min(1), name: z.string().min(1).optional() })
+    inputSchema: z.object({ sourcePath: z.string().min(1).max(512), name: z.string().min(1).optional() })
   }, async ({ sourcePath, name }) => jsonResult(await videos.import(sourcePath, name)));
 
   server.registerTool("video_analyze", {
@@ -415,10 +601,16 @@ async function createMcpServer(): Promise<McpServer> {
   return server;
 }
 
-const handle = serveStdio(createMcpServer);
-const close = async () => {
-  await handle.close();
-  process.exit(0);
-};
-process.on("SIGINT", close);
-process.on("SIGTERM", close);
+const isEntryPoint = process.argv[1]
+  ? pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+  : false;
+
+if (isEntryPoint) {
+  const handle = serveStdio(() => createMcpServer());
+  const close = async () => {
+    await handle.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", close);
+  process.on("SIGTERM", close);
+}

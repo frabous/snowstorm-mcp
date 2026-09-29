@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { requirePathInside, snowstormRoot } from "../src/config.js";
-import { applyPatch, looksLikeNumericString, mergeSnowstormExport, numericLiteral, summarizeParticle } from "../src/particle-store.js";
+import { applyPatch, looksLikeNumericString, mergeSnowstormExport, numericLiteral, ParticleBomError, ParticleStore, summarizeParticle } from "../src/particle-store.js";
 import { resolveTexturePath } from "../src/texture.js";
 import { designBrief } from "../src/authoring-guide.js";
 import { formatTimecode, parseTimecode } from "../src/video.js";
 import type { JsonObject } from "../src/types.js";
+import { projectFixture } from "./fixtures.js";
 
 const original: JsonObject = {
   format_version: "1.10.0",
@@ -25,6 +28,23 @@ const original: JsonObject = {
 };
 
 describe("particle store", () => {
+  it("detects a UTF-8 BOM at the read boundary and preserves ordinary JSON parse errors", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-store-"));
+    const config = await projectFixture(root);
+    const store = new ParticleStore(config);
+    const file = "bom.particle.json";
+    await writeFile(path.join(config.particlesRoot, file), `\uFEFF${JSON.stringify(original)}`, "utf8");
+
+    await expect(store.read(file)).rejects.toBeInstanceOf(ParticleBomError);
+    await expect(store.readRaw(file)).rejects.toMatchObject({
+      code: "bom",
+      message: expect.stringContaining("save the file as UTF-8 without BOM")
+    });
+
+    await writeFile(path.join(config.particlesRoot, file), "{", "utf8");
+    await expect(store.read(file)).rejects.toBeInstanceOf(SyntaxError);
+  });
+
   it("applies narrow RFC 6902 patches", () => {
     const patched = applyPatch(original, [{ op: "replace", path: "/particle_effect/components/minecraft:emitter_rate_instant/num_particles", value: 12 }]);
     const effect = patched.particle_effect as JsonObject;

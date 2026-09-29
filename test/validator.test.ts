@@ -51,4 +51,25 @@ describe("particle validation", () => {
     const result = await validateParticle(particle, config, "test.particle.json");
     expect(result.issues).toContainEqual(expect.objectContaining({ severity: "error", code: "texture" }));
   });
+
+  it("warns when steady spawn_rate is an expression and explains the scene-rendering workaround", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-validator-"));
+    const config = await projectFixture(root);
+    const particle = validParticle();
+    const components = (particle.particle_effect as JsonObject).components as JsonObject;
+    delete components["minecraft:emitter_rate_instant"];
+    components["minecraft:emitter_rate_steady"] = {
+      spawn_rate: "variable.spawn_rate",
+      max_particles: 120
+    };
+
+    const result = await validateParticle(particle, config, "test.particle.json");
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      severity: "warning",
+      code: "scene-spawn-rate",
+      path: "/particle_effect/components/minecraft:emitter_rate_steady/spawn_rate",
+      message: expect.stringContaining("size the render envelope based on particle size and alpha only")
+    }));
+  });
 });

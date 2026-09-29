@@ -1,9 +1,43 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, link, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export function sha256(raw: string): string {
+export function sha256(raw: string | Uint8Array): string {
   return createHash("sha256").update(raw).digest("hex");
+}
+
+/** Publishes a new binary asset via a temporary file and atomic no-replace link. */
+export async function writeFileSafelyNoOverwrite(
+  target: string,
+  contents: Buffer | Uint8Array,
+  beforePublish?: () => void
+): Promise<{ digest: string }> {
+  await mkdir(path.dirname(target), { recursive: true });
+  return withFileLocks([target], async () => {
+    const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`);
+    try {
+      const temporaryHandle = await open(temporary, "wx");
+      try {
+        await temporaryHandle.writeFile(contents);
+        await temporaryHandle.sync();
+      } finally {
+        await temporaryHandle.close();
+      }
+
+      beforePublish?.();
+      try {
+        await link(temporary, target);
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error(`Refusing to overwrite existing file: ${target}`);
+        }
+        throw error;
+      }
+      return { digest: sha256(contents) };
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  });
 }
 
 export async function readTextWithDigest(file: string): Promise<{ raw: string; digest: string }> {
@@ -20,22 +54,14 @@ async function acquireLock(target: string) {
       return { lock, handle };
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        const metadata = JSON.parse(await readFile(lock, "utf8")) as { pid?: number; createdAt?: number };
-        if (metadata.pid && metadata.createdAt && Date.now() - metadata.createdAt >= 30_000) {
-          try {
-            process.kill(metadata.pid, 0);
-          } catch {
-            await rm(lock, { force: true });
-          }
-        }
-      } catch {
-        // Leave unreadable locks to their owner.
-      }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
-  throw new Error(`Timed out waiting for another Snowstorm MCP write: ${path.basename(target)}`);
+  throw new Error(
+    `Timed out waiting for another Snowstorm MCP write: ${path.basename(target)}. ` +
+    `Automatic stale-lock reclamation is disabled to avoid removing an active owner's lock. ` +
+    `Verify no Snowstorm MCP writer is running, then remove the lock file manually: ${lock}`
+  );
 }
 
 export async function writeTextSafely(
@@ -45,24 +71,23 @@ export async function writeTextSafely(
   artifactsRoot: string,
   backupName = path.basename(target)
 ): Promise<{ digest: string; backup: string }> {
-  const held = await acquireLock(target);
-  let temporary: string | undefined;
-  try {
-    const current = await readFile(target, "utf8");
-    if (sha256(current) !== expectedDigest) throw new Error(`File changed since it was read: ${target}`);
-    const backupDirectory = path.join(artifactsRoot, "backups", new Date().toISOString().replace(/[:.]/g, "-"));
-    const backup = path.join(backupDirectory, backupName);
-    await mkdir(path.dirname(backup), { recursive: true });
-    await cp(target, backup);
-    temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`);
-    await writeFile(temporary, raw, "utf8");
-    await rename(temporary, target);
-    return { digest: sha256(raw), backup };
-  } finally {
-    if (temporary) await rm(temporary, { force: true });
-    await held.handle.close();
-    await rm(held.lock, { force: true });
-  }
+  return withFileLocks([target], async () => {
+    let temporary: string | undefined;
+    try {
+      const current = await readFile(target, "utf8");
+      if (sha256(current) !== expectedDigest) throw new Error(`File changed since it was read: ${target}`);
+      const backupDirectory = path.join(artifactsRoot, "backups", new Date().toISOString().replace(/[:.]/g, "-"));
+      const backup = path.join(backupDirectory, backupName);
+      await mkdir(path.dirname(backup), { recursive: true });
+      await cp(target, backup);
+      temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`);
+      await writeFile(temporary, raw, "utf8");
+      await rename(temporary, target);
+      return { digest: sha256(raw), backup };
+    } finally {
+      if (temporary) await rm(temporary, { force: true });
+    }
+  });
 }
 
 export async function withFileLocks<T>(targets: string[], operation: () => Promise<T>): Promise<T> {
