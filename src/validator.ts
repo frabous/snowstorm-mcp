@@ -126,6 +126,15 @@ function validateStructure(document: JsonObject, file: string): ValidationIssue[
     for (const key of ["num_particles", "spawn_rate", "max_particles"]) {
       if (rate[key] !== undefined) checkPositive(issues, rate[key], `/particle_effect/components/${name}/${key}`, true);
     }
+    if (name === "minecraft:emitter_rate_steady" && typeof rate.spawn_rate === "string" && rate.spawn_rate.trim() && numericLiteral(rate.spawn_rate) === null && molangLooksBalanced(rate.spawn_rate)) {
+      issue(
+        issues,
+        "warning",
+        "scene-spawn-rate",
+        "Expression-valued steady spawn_rate is unsupported for particle_render_scene scene bounds. Use a numeric spawn_rate, or size the render envelope based on particle size and alpha only.",
+        "/particle_effect/components/minecraft:emitter_rate_steady/spawn_rate"
+      );
+    }
   }
   for (const name of emitterLifetimes) {
     const lifetime = components[name] as JsonObject;

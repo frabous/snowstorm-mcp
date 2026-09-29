@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import path from "node:path";
 import { requireResolvedPathInside } from "./config.js";
 import type { ProjectConfig } from "./types.js";
+import { artifactDirectoryPath } from "./artifact-path.js";
+import { runProcessBinary as runBinary, runProcessText as run } from "./process-utils.js";
 
 const videoExtensions = new Set([".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v"]);
 
@@ -68,80 +69,7 @@ interface MediaProbe {
   audio: { startSeconds: number; durationSeconds: number } | null;
 }
 
-const MAX_PROCESS_TEXT_BYTES = 4 * 1024 * 1024;
-const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 export const MAX_COMPARISON_RENDERED_PIXELS = 480_000_000;
-
-function run(command: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timeout: NodeJS.Timeout | undefined;
-    const finish = (failure?: Error) => {
-      if (settled) return;
-      settled = true;
-      if (timeout) clearTimeout(timeout);
-      failure ? reject(failure) : resolve({ stdout, stderr });
-    };
-    const append = (current: string, chunk: Buffer): string | undefined => {
-      const next = current + chunk.toString();
-      return Buffer.byteLength(next) > MAX_PROCESS_TEXT_BYTES ? undefined : next;
-    };
-    child.stdout.on("data", (chunk: Buffer) => {
-      const next = append(stdout, chunk);
-      if (next === undefined) {
-        child.kill();
-        finish(new Error(`${command} exceeded the ${MAX_PROCESS_TEXT_BYTES} byte output limit.`));
-      } else stdout = next;
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      const next = append(stderr, chunk);
-      if (next === undefined) {
-        child.kill();
-        finish(new Error(`${command} exceeded the ${MAX_PROCESS_TEXT_BYTES} byte output limit.`));
-      } else stderr = next;
-    });
-    timeout = setTimeout(() => {
-      child.kill();
-      finish(new Error(`${command} exceeded the 120000ms process timeout.`));
-    }, 120_000);
-    child.once("error", (failure) => finish(failure));
-    child.once("exit", (code) => code === 0 ? finish() : finish(new Error(`${command} failed (${code}): ${stderr.slice(-1200)}`)));
-  });
-}
-
-function runBinary(command: string, args: string[]): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    const output: Buffer[] = [];
-    let outputBytes = 0;
-    let error = "";
-    let settled = false;
-    let timeout: NodeJS.Timeout | undefined;
-    const finish = (failure?: Error) => {
-      if (settled) return;
-      settled = true;
-      if (timeout) clearTimeout(timeout);
-      failure ? reject(failure) : resolve(Buffer.concat(output));
-    };
-    child.stdout.on("data", (chunk: Buffer) => {
-      outputBytes += chunk.length;
-      if (outputBytes > MAX_AUDIO_BYTES) {
-        child.kill();
-        finish(new Error(`${command} exceeded the ${MAX_AUDIO_BYTES} byte binary output limit.`));
-      } else output.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => { error = `${error}${chunk.toString()}`.slice(-16_384); });
-    timeout = setTimeout(() => {
-      child.kill();
-      finish(new Error(`${command} exceeded the 120000ms process timeout.`));
-    }, 120_000);
-    child.once("error", (failure) => finish(failure));
-    child.once("exit", (code) => code === 0 ? finish() : finish(new Error(`${command} failed (${code}): ${error.slice(-1200)}`)));
-  });
-}
 
 function ratio(value: string | undefined): number | null {
   if (!value || value === "0/0") return null;
@@ -376,7 +304,7 @@ export class VideoAnalyzer {
     if (previewMedia.metadata.durationSeconds + 0.05 < options.durationSeconds) {
       throw new Error(`Preview is shorter than the requested ${options.durationSeconds.toFixed(3)} second comparison.`);
     }
-    const artifactDirectory = path.join(this.config.artifactsRoot, "comparisons", `${slug(path.basename(file, path.extname(file)))}-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`);
+    const artifactDirectory = artifactDirectoryPath(this.config.artifactsRoot, "comparisons", slug(path.basename(file, path.extname(file))));
     await mkdir(artifactDirectory, { recursive: true });
     const output = path.join(artifactDirectory, "comparison.mp4");
     let completed = false;
@@ -439,7 +367,7 @@ export class VideoAnalyzer {
     const end = Math.max(0, metadata.durationSeconds - 1 / (metadata.fps ?? 30));
     const evenTimes = Array.from({ length: samples }, (_, index) => end * index / Math.max(1, samples - 1));
     const selected = [...new Set([...sceneTimes, ...evenTimes].map((time) => Math.min(end, Math.max(0, time)).toFixed(3)))].map(Number).sort((a, b) => a - b).slice(0, samples);
-    const artifactDirectory = path.join(this.config.artifactsRoot, "video", `${slug(path.basename(file, path.extname(file)))}-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`);
+    const artifactDirectory = artifactDirectoryPath(this.config.artifactsRoot, "video", slug(path.basename(file, path.extname(file))));
     const frames = await this.extract(source, selected, artifactDirectory);
     const contactSheet = await this.createContactSheet(frames, artifactDirectory);
     const manifest = path.join(artifactDirectory, "manifest.json");

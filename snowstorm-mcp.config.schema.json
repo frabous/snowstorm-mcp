@@ -4,15 +4,64 @@
   "title": "Snowstorm MCP project configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["particlesRoot", "resourcePackRoot", "selectorsFile", "spellFile", "artifactsRoot"],
   "properties": {
     "$schema": { "type": "string" },
+    "activeProject": { "type": "string", "pattern": "\\S" },
+    "projects": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/project" }
+    },
     "projectName": { "type": "string", "minLength": 1 },
     "particlesRoot": { "type": "string", "minLength": 1 },
     "resourcePackRoot": { "type": "string", "minLength": 1 },
+    "sharedTextureBanks": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "minLength": 1 }
+    },
     "selectorsFile": { "type": "string", "minLength": 1 },
+    "instanceSelectorsFile": { "type": "string", "minLength": 1 },
     "spellFile": { "type": "string", "minLength": 1 },
     "referenceVideosRoot": { "type": "string", "minLength": 1 },
     "artifactsRoot": { "type": "string", "minLength": 1 }
+  },
+  "oneOf": [
+    {
+      "required": ["projects"],
+      "not": {
+        "anyOf": [
+          { "required": ["projectName"] },
+          { "required": ["particlesRoot"] },
+          { "required": ["resourcePackRoot"] },
+          { "required": ["selectorsFile"] },
+          { "required": ["instanceSelectorsFile"] },
+          { "required": ["spellFile"] },
+          { "required": ["referenceVideosRoot"] },
+          { "required": ["artifactsRoot"] }
+        ]
+      }
+    },
+    {
+      "required": ["particlesRoot", "resourcePackRoot", "selectorsFile", "spellFile", "artifactsRoot"],
+      "not": { "required": ["projects"] }
+    }
+  ],
+  "$defs": {
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["particlesRoot", "resourcePackRoot", "selectorsFile", "spellFile", "artifactsRoot"],
+      "properties": {
+        "projectName": { "type": "string", "minLength": 1 },
+        "particlesRoot": { "type": "string", "minLength": 1 },
+        "resourcePackRoot": { "type": "string", "minLength": 1 },
+        "selectorsFile": { "type": "string", "minLength": 1 },
+        "instanceSelectorsFile": { "type": "string", "minLength": 1 },
+        "spellFile": { "type": "string", "minLength": 1 },
+        "referenceVideosRoot": { "type": "string", "minLength": 1 },
+        "artifactsRoot": { "type": "string", "minLength": 1 }
+      }
+    }
   }
 }

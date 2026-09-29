@@ -8,6 +8,7 @@ import { startSnowstormHost, type SnowstormHost } from "../snowstorm-host.js";
 import type { JsonObject, ProjectConfig } from "../types.js";
 import { validateParticle } from "../validator.js";
 import { particleTexture, resolveTexturePath } from "../texture.js";
+import { projectRoot } from "../project-path.js";
 
 declare global {
   interface Window {
@@ -40,7 +41,7 @@ async function main(): Promise<void> {
   if (!file) throw new Error("No particle file is available to open.");
   let current = await store.readRaw(file);
   let saveQueue = Promise.resolve();
-  const host = await startSnowstormHost(snowstormRoot(path.dirname(config.configPath)), true);
+  const host = await startSnowstormHost(snowstormRoot(projectRoot(config)), true);
   const isTrustedSender = (url: string) => {
     try {
       return new URL(url).origin === host.url;

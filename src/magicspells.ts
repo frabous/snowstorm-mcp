@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { isSeq, parseDocument, type Document, type YAMLSeq } from "yaml";
 import type { ProjectConfig, TimelineLayer, ValidationIssue } from "./types.js";
 import { readTextWithDigest, writeTextSafely } from "./safe-file.js";
@@ -19,6 +18,7 @@ export interface SpellTimeline {
 }
 
 const maximumTimelineSeconds = 21_600;
+const nonEmitterSpellClasses = new Set(["PotionEffectSpell", "LeapSpell", "FlySpell", "CommandSpell", "TeleportSpell", "command", "teleport"]);
 
 function push(issues: ValidationIssue[], severity: "error" | "warning", code: string, message: string): void {
   issues.push({ severity, code, message });
@@ -71,6 +71,9 @@ export async function inspectSpellTimeline(config: ProjectConfig, mainSpell?: st
   const maximumTicks = ticksPerSecond * maximumTimelineSeconds;
   if (selected) {
     const parent = parsed.spells[selected];
+    const selectedHasInvocations = Boolean(parent && Array.isArray(parent.spells) && parent.spells.some((step) =>
+      typeof step === "string" && step.trim() !== "" && parseDelay(step) === null
+    ));
     if (!parent) push(parsed.issues, "error", "main-spell-missing", `MagicSpells entry '${selected}' does not exist.`);
     else if (parent["spell-class"] !== ".MultiSpell") push(parsed.issues, "error", "main-spell-class", `${selected} must use .MultiSpell because it owns DELAY entries.`);
     else if (!Array.isArray(parent.spells)) push(parsed.issues, "error", "main-spell-sequence", `${selected}.spells must be a sequence.`);
@@ -103,11 +106,16 @@ export async function inspectSpellTimeline(config: ProjectConfig, mainSpell?: st
       }
       endTicks = tick;
     }
+    if (selectedHasInvocations && occurrences.length === 0) {
+      push(parsed.issues, "error", "scheduling-skipped", `${selected} contains helper invocations, but scheduling produced zero occurrences.`);
+    }
   }
   for (const [name, spell] of Object.entries(parsed.spells)) {
     if (spell?.["spell-class"] === ".TargetedMultiSpell" && Array.isArray(spell.spells)) {
       for (const step of spell.spells) {
-        if (typeof step === "string" && parseDelay(step) !== null) push(parsed.issues, "error", "targeted-delay", `${name} contains DELAY, which .TargetedMultiSpell does not support.`);
+        if (typeof step === "string" && parseDelay(step) !== null) {
+          push(parsed.issues, "warning", "targeted-delay", `${name} contains DELAY, which is non-conforming for .TargetedMultiSpell; this is recorded as a warning.`);
+        }
       }
     }
   }
@@ -148,19 +156,23 @@ export function helperDetails(spell: Spell): {
   relativeOffset: string | null;
   issues: string[];
 } {
-  const traversal = nestedCustomNames(spell);
-  const names = [...new Set(traversal.output)];
   const spellClass = spell["spell-class"];
+  const spellClassName = typeof spellClass === "string" ? spellClass.trim().split(/[.$]/).pop() ?? "" : "";
   const anchor = spellClass === ".buff.ArmorStandSpell"
     ? "caster_attached"
     : spellClass === ".instant.ParticleProjectileSpell"
       ? "fixed_at_helper_launch"
-      : "unknown";
+      : nonEmitterSpellClasses.has(spellClassName)
+        ? "non_emitter"
+        : "unknown";
+  const traversal = anchor === "non_emitter" ? null : nestedCustomNames(spell);
+  const names = traversal ? [...new Set(traversal.output)] : [];
   const durationKey = anchor === "caster_attached" ? "duration" : anchor === "fixed_at_helper_launch" ? "max-duration" : "";
   const duration = durationKey && typeof spell[durationKey] === "number" && Number.isFinite(spell[durationKey]) ? spell[durationKey] as number : null;
   const issues: string[] = [];
-  if (traversal.limited) issues.push("helper structure is cyclic or exceeds traversal limits");
-  if (names.length !== 1) issues.push(`expected exactly one custom-name, found ${names.length}`);
+  if (traversal?.limited) issues.push("helper structure is cyclic or exceeds traversal limits");
+  if (anchor === "unknown") issues.push(`unrecognized spell-class '${String(spellClass)}'`);
+  if (anchor !== "non_emitter" && names.length !== 1) issues.push(`expected exactly one custom-name, found ${names.length}`);
   if (anchor === "caster_attached") {
     if (spell["cancel-on-logout"] !== true) issues.push("attached helper must set cancel-on-logout: true");
     if (spell["cancel-on-teleport"] !== true) issues.push("attached helper must set cancel-on-teleport: true");
@@ -169,7 +181,7 @@ export function helperDetails(spell: Spell): {
     if (spell["change-pitch"] !== false) issues.push("fixed helper must set change-pitch: false");
   }
   return {
-    selector: names[0] ?? null,
+    selector: anchor === "non_emitter" ? null : names[0] ?? null,
     anchor,
     duration,
     relativeOffset: typeof spell["relative-offset"] === "string" ? spell["relative-offset"] : null,

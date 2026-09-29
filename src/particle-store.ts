@@ -9,6 +9,23 @@ function isObject(value: JsonValue | undefined): value is JsonObject {
   return Boolean(value) && !Array.isArray(value) && typeof value === "object";
 }
 
+export class ParticleBomError extends Error {
+  readonly code = "bom";
+
+  constructor(file: string) {
+    super(`UTF-8 BOM detected at the start of '${file}'. Remove the BOM and save the file as UTF-8 without BOM, then validate again.`);
+    this.name = "ParticleBomError";
+  }
+}
+
+function parseParticle(raw: string, file: string): JsonObject {
+  if (raw.charCodeAt(0) === 0xfeff) throw new ParticleBomError(file);
+  const document = JSON.parse(raw) as JsonValue;
+  if (!isObject(document)) throw new Error(`Particle root must be a JSON object: ${file}`);
+  assertJsonWithinLimits(document, `Particle document ${file}`);
+  return document;
+}
+
 function clone<T extends JsonValue>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -241,30 +258,25 @@ export class ParticleStore {
   async read(file: string): Promise<JsonObject> {
     const raw = await readFile(this.resolve(file), "utf8");
     if (Buffer.byteLength(raw) > 5 * 1024 * 1024) throw new Error(`Particle exceeds the 5 MiB serialized limit: ${file}`);
-    const document = JSON.parse(raw) as JsonValue;
-    if (!isObject(document)) throw new Error(`Particle root must be a JSON object: ${file}`);
-    assertJsonWithinLimits(document, `Particle document ${file}`);
-    return document;
+    return parseParticle(raw, file);
   }
 
   async readRaw(file: string): Promise<{ raw: string; digest: string; document: JsonObject }> {
     const raw = await readFile(this.resolve(file), "utf8");
     if (Buffer.byteLength(raw) > 5 * 1024 * 1024) throw new Error(`Particle exceeds the 5 MiB serialized limit: ${file}`);
-    const document = JSON.parse(raw) as JsonValue;
-    if (!isObject(document)) throw new Error(`Particle root must be a JSON object: ${file}`);
-    assertJsonWithinLimits(document, `Particle document ${file}`);
+    const document = parseParticle(raw, file);
     return { raw, digest: sha256(raw), document };
   }
 
   async write(file: string, document: JsonObject, expectedDigest?: string): Promise<{ digest: string; backup?: string }> {
     const target = this.resolve(file);
-    return this.withLock(target, async () => this.writeLocked(file, target, document, expectedDigest));
+    return withFileLocks([target], async () => this.writeLocked(file, target, document, expectedDigest));
   }
 
   async create(file: string, document: JsonObject): Promise<{ digest: string }> {
     assertJsonWithinLimits(document, "Particle document");
     const target = this.resolve(file);
-    return this.withLock(target, async () => {
+    return withFileLocks([target], async () => {
       await mkdir(path.dirname(target), { recursive: true });
       const raw = `${JSON.stringify(document, null, 2)}\n`;
       const handle = await open(target, "wx");
@@ -362,44 +374,6 @@ export class ParticleStore {
         await Promise.all(prepared.map((entry) => rm(entry.temporary, { force: true })));
       }
     });
-  }
-
-  private async withLock<T>(target: string, operation: () => Promise<T>): Promise<T> {
-    const lock = `${target}.snowstorm-mcp.lock`;
-    let handle;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      try {
-        handle = await open(lock, "wx");
-        await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }), "utf8");
-        break;
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        await this.reclaimStaleLock(lock);
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    }
-    if (!handle) throw new Error(`Timed out waiting for another Snowstorm MCP write: ${path.basename(target)}`);
-    try {
-      return await operation();
-    } finally {
-      await handle.close();
-      await rm(lock, { force: true });
-    }
-  }
-
-  private async reclaimStaleLock(lock: string): Promise<void> {
-    try {
-      const metadata = JSON.parse(await readFile(lock, "utf8")) as { pid?: number; createdAt?: number };
-      if (!metadata.pid || !metadata.createdAt || Date.now() - metadata.createdAt < 30_000) return;
-      try {
-        process.kill(metadata.pid, 0);
-        return;
-      } catch {
-        await rm(lock, { force: true });
-      }
-    } catch {
-      // An unreadable lock is left intact until its owner releases it.
-    }
   }
 
   async exists(file: string): Promise<boolean> {

@@ -10,11 +10,15 @@ Snowstorm is used for simulation only. The server preserves `blockbuster:*` exte
 - Query selected fields across many particles and patch a preflighted batch with coordinated rollback.
 - Preserve Blockbuster fields when the Snowstorm editor saves a file.
 - Validate particle, texture, selector and MagicSpells links as one package graph.
+- Classify gameplay-only MagicSpells helpers without requiring fake particle selectors; report `TargetedMultiSpell` delays as non-blocking warnings.
+- Merge selector fragments into an instance file with conflict reporting, dry-run artifacts, digest checks and backups.
 - Inspect or retime a MagicSpells `.MultiSpell` without rewriting unrelated definitions.
 - Render deterministic single-particle or absolute-timeline scene previews as PNG, GIF or MP4.
 - Compose a scene with per-layer camera cuts, a solo layer, in-memory layer overrides and activity-derived sample times.
 - Probe Molang values at explicit ages with per-field, absolute-bound and cross-field assertions.
 - Inspect real particle PNGs side by side on a checkerboard with their declared dimensions.
+- Generate nine measured texture primitives, import PNGs into configured shared banks, browse a texture catalogue and calculate flipbook UVs from real images.
+- Switch among configured projects at runtime with `project_list` and `project_use`; existing flat single-project configs remain supported.
 - Open a selected particle in a secure local Electron window.
 - Expose the built-in Blockbuster/Snowstorm authoring guide and effect design briefs to MCP clients.
 - Import source videos into an automatically managed folder, then analyze them with FFmpeg scene detection.
@@ -43,7 +47,7 @@ npm test
 
 Edit `snowstorm-mcp.config.json` so its paths target your package. The provided local configuration is intentionally ignored by Git; it may point to a private Minecraft instance.
 
-Configuration is read once at startup. Repointing the file at another package does not rebind a running server, so every particle path reports the project it is still bound to and asks for a restart instead of failing with a bare `ENOENT`.
+The legacy flat configuration describes one project and continues to work. To switch projects without restarting, use the registry format below. Adding or changing project definitions on disk requires a restart; selecting one of the already configured projects does not.
 
 Example layout:
 
@@ -55,25 +59,109 @@ my-package/
   spell.yml
 ```
 
-## OpenCode Configuration
+## MCP Client Configuration
 
-Add this server entry to OpenCode's `mcp` configuration after building. Use absolute paths on Windows.
+The server uses local stdio and requires the absolute path to the built `dist/mcp.js` and to the selected project configuration. Replace the example paths below.
+
+### Claude Code
+
+Use user scope to make the server available across Claude Code projects, or choose a narrower scope if preferred:
+
+```powershell
+claude mcp add --scope user --transport stdio --env "SNOWSTORM_MCP_CONFIG=C:\path\to\snowstorm-mcp\snowstorm-mcp.config.json" snowstorm-mcp -- node "C:\path\to\snowstorm-mcp\dist\mcp.js"
+claude mcp list
+```
+
+In a Claude Code session, run `/mcp` to inspect the connection and tools.
+
+### Codex CLI
+
+Codex CLI, the Codex IDE extension and the ChatGPT desktop app share the Codex MCP configuration:
+
+```powershell
+codex mcp add snowstorm-mcp --env "SNOWSTORM_MCP_CONFIG=C:\path\to\snowstorm-mcp\snowstorm-mcp.config.json" -- node "C:\path\to\snowstorm-mcp\dist\mcp.js"
+codex mcp list
+```
+
+### OpenCode
+
+Add this entry to OpenCode's `mcp` configuration after building. The same shape works in a project `opencode.json` or the user's global OpenCode configuration:
 
 ```json
 {
-  "snowstorm-mcp": {
-    "type": "local",
-    "command": ["node", "C:\\path\\to\\snowstorm-mcp\\dist\\mcp.js"],
-    "environment": {
-      "SNOWSTORM_MCP_CONFIG": "C:\\path\\to\\snowstorm-mcp\\snowstorm-mcp.config.json"
-    },
-    "enabled": true,
-    "timeout": 120000
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "snowstorm-mcp": {
+      "type": "local",
+      "command": ["node", "C:\\path\\to\\snowstorm-mcp\\dist\\mcp.js"],
+      "environment": {
+        "SNOWSTORM_MCP_CONFIG": "C:\\path\\to\\snowstorm-mcp\\snowstorm-mcp.config.json"
+      },
+      "enabled": true,
+      "timeout": 120000
+    }
   }
 }
 ```
 
-Restart OpenCode after changing its configuration.
+Use `opencode mcp list` to verify the server. Restart the client after changing its configuration.
+
+### Copy-paste setup prompt for an AI agent
+
+Give the following prompt to Claude Code, Codex CLI, OpenCode or another computer-use/coding agent to set up Snowstorm MCP on your machine:
+
+```text
+Set up this Snowstorm MCP installation on my machine.
+
+Repository path: <absolute path to snowstorm-mcp>
+Particle project(s): <absolute path(s) to my package(s), or ask me to identify them>
+Clients to configure: detect Claude Code, Codex CLI, OpenCode and other installed MCP clients; configure each one I approve.
+
+Work through these steps and report what you did:
+1. Inspect the operating system, shell, repository, existing MCP configuration files, and installed client versions. Use each client's current official documentation for its exact config location, command syntax, scope and verification command. Do not assume that another client's JSON format applies. This project documents Windows support; if the OS is different, explain the MCP-only limitations before proceeding.
+2. Check Node.js, npm, FFmpeg and FFprobe availability. Check whether dependencies are installed, Chromium is available for Playwright, and `dist/mcp.js` exists. Show any prerequisite installs or PATH changes and get my approval before performing them.
+3. Inspect `snowstorm-mcp.config.schema.json` and the package layout. Ask me for any missing or ambiguous particle, resource-pack, selector, instance-selector, spell or artifact paths. Never invent project paths. Keep secrets out of files, logs and chat.
+4. Create or update `snowstorm-mcp.config.json` only after showing me the proposed values. Use the legacy flat format for one project or the registry format for several projects. Keep every path valid. Use `../library/textures` as the default shared texture bank when that matches this repository layout; preserve an explicit `sharedTextureBanks` list or `[]` if I have one. Set `instanceSelectorsFile` only to the real instance selectors file.
+5. Run `npm install` only if dependencies are absent and I approve it, then run `npm run build` and `npm test`. Do not run any tool that writes particles, selectors, textures or other game assets during setup.
+6. For each approved client, merge one local stdio server entry without removing or rewriting unrelated settings. Launch `node <absolute-repository-path>/dist/mcp.js` and set `SNOWSTORM_MCP_CONFIG` to the absolute config path. Choose user/global or project/local scope only after checking the client's behavior and confirming my preference. Back up an existing client config before editing it.
+7. Start a fresh client session and use that client's documented MCP status/list command. Verify the server exposes its tools, call `project_list`, then run `particle_list` only if the selected project path is valid. Do not call a mutating tool as a connection test.
+8. Summarize configured clients and scopes, files changed, exact verification results, and any remaining issue. Leave private per-machine config files uncommitted.
+```
+
+## Project Registry and Shared Texture Banks
+
+The flat configuration remains supported for one project. For several projects, use a registry with the project identifier as each key. `sharedTextureBanks` belongs at registry level and applies to every configured project:
+
+```json
+{
+  "$schema": "./snowstorm-mcp.config.schema.json",
+  "activeProject": "spell-a",
+  "sharedTextureBanks": ["../library/textures"],
+  "projects": {
+    "spell-a": {
+      "projectName": "spell-a",
+      "particlesRoot": "../spell-a/particles",
+      "resourcePackRoot": "../spell-a/resourcepack",
+      "selectorsFile": "../spell-a/selectors.json",
+      "instanceSelectorsFile": "../spell-a/config/metamorph/selectors.json",
+      "spellFile": "../spell-a/spell.yml",
+      "artifactsRoot": "./.snowstorm-mcp/artifacts/spell-a"
+    },
+    "spell-b": {
+      "projectName": "spell-b",
+      "particlesRoot": "../spell-b/particles",
+      "resourcePackRoot": "../spell-b/resourcepack",
+      "selectorsFile": "../spell-b/selectors.json",
+      "spellFile": "../spell-b/spell.yml",
+      "artifactsRoot": "./.snowstorm-mcp/artifacts/spell-b"
+    }
+  }
+}
+```
+
+Use `project_list` to see configured keys and the active project, then `project_use` to switch immediately. Add `instanceSelectorsFile` when `selectors_merge` should default to the real instance selectors file; a live merge requires `write: true`, `dryRun: false` and the inspected SHA-256 digest. If `sharedTextureBanks` is omitted, the server resolves the recommended `../library/textures` path relative to the configuration file. Set it to `[]` to disable shared banks.
+
+`texture_generate` writes to the project resource pack unless a configured bank is selected. `texture_import` copies a PNG into a configured bank. `texture_list` shows the winning source and particles using each texture; project textures take precedence over shared-bank duplicates.
 
 ## Particle Workflow
 
@@ -110,6 +198,10 @@ Snowstorm builds its particle material with depth writing enabled, and every qua
 ## Texture Inspection
 
 `texture_contact_sheet` renders up to 16 real PNGs on a checkerboard with their dimensions, bytes and alpha flag. It is the only view that separates an artwork defect from a compositing artefact: a hard straight contour on a tile is the texture's own alpha, and it survives a scene render with `depthWrite` disabled.
+
+`texture_generate` writes a named PNG into the project resource pack or a selected shared bank. It supports `soft_lens`, `anime_cloud`, `faceted_crystal`, `bokeh_disc`, `puff`, `ember`, `streak`, `lightning` and `beam_core`. The `soft_lens` primitive measures decoded pixels and refuses a bright-frame coverage below 35%. `texture_list` catalogs project and bank assets by name, dimensions, alpha, coverage and usage. `texture_import` validates and copies an external PNG into a configured bank without overwriting existing files. `flipbook_atlas` calculates its UV values from the actual dimensions of a resolved PNG.
+
+Texture metrics and Snowstorm previews help inspect assets; they do not prove Minecraft playback. Pre-colored textures generally need a neutral tint, and generated PNGs still need to be checked in the target game.
 
 ```json
 {
@@ -222,7 +314,10 @@ The `Save safely` control merges Snowstorm's output with the prior Blockbuster d
 | `spell_timeline_inspect` / `spell_retime` | Strict MagicSpells timeline reading and timing-only edits. |
 | `particle_probe` | Numeric Molang samples with per-field, absolute-bound and cross-field assertions. |
 | `particle_render` / `particle_render_scene` | Single-particle or deterministic multi-layer previews, with camera cuts, solo layers and in-memory overrides. |
-| `texture_contact_sheet` | Real PNGs on a checkerboard with declared dimensions. |
+| `selectors_merge` | Dry-run or digest-checked additive merge of a package selectors fragment into the configured instance file. |
+| `texture_generate` / `texture_import` | Generate measured texture primitives or copy an external PNG into a shared bank. |
+| `texture_list` / `flipbook_atlas` / `texture_contact_sheet` | Browse assets and their usage, compute UV values, or inspect PNGs on a checkerboard. |
+| `project_list` / `project_use` | Inspect configured projects and switch the active one without restarting. |
 | `particle_open_desktop` | Electron editor. |
 | `particle_authoring_guide` / `particle_design_brief` | Embedded Snowstorm authoring knowledge. |
 | `video_import` | Copy a user-provided video into the automatic managed directory. |
@@ -234,7 +329,7 @@ The `Save safely` control merges Snowstorm's output with the prior Blockbuster d
 
 ## Security and Limits
 
-The server confines configured particle, texture and reference-video paths, rejects traversal including symlink escapes, serializes MCP writes, and creates backups. Batch writes lock every target, verify every digest before mutation and attempt every rollback if a rename fails. A process crash can still interrupt a multi-file commit, so retained backups remain the recovery source. Do not run it against folders writable by untrusted local processes.
+The server confines configured particle, texture and reference-video paths, rejects traversal including symlink escapes, serializes MCP writes, and creates backups. Batch writes lock every target, verify every digest before mutation and attempt every rollback if a rename fails. New texture assets publish atomically without replacing an existing file. If a process crashes while holding a file lock, the next write reports the lock path; remove it only after confirming no Snowstorm MCP writer is still running. A process crash can still interrupt a multi-file commit, so retained backups remain the recovery source. Do not run it against folders writable by untrusted local processes.
 
 Generated previews validate the local Snowstorm simulator only. Verify texture blending, anchors, collisions, selector links, MagicSpells timing and performance inside Minecraft before shipping.
 

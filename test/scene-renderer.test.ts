@@ -86,6 +86,20 @@ describe("scene render budgets", () => {
     expect(() => enforceRenderBudget(particle, "quoted.particle.json", 1)).toThrow("expression-valued num_particles");
   });
 
+  it("explains why expression-valued steady spawn_rate is unsupported by scene bounds", () => {
+    const particle = validParticle();
+    const components = (particle.particle_effect as JsonObject).components as JsonObject;
+    delete components["minecraft:emitter_rate_instant"];
+    components["minecraft:emitter_rate_steady"] = {
+      spawn_rate: "variable.spawn_rate",
+      max_particles: 120
+    };
+
+    expect(() => enforceRenderBudget(particle, "quoted.particle.json", 1)).toThrow(
+      "quoted.particle.json uses expression-valued spawn_rate, which is unsupported for particle_render_scene scene bounds. Use a numeric spawn_rate, or size the render envelope based on particle size and alpha only."
+    );
+  });
+
   it("enforces the particle budget on a downgraded numeric string", () => {
     const particle = validParticle();
     const components = (particle.particle_effect as JsonObject).components as JsonObject;

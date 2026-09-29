@@ -55,6 +55,45 @@ describe("MagicSpells timeline", () => {
     expect(result.issues).toContainEqual(expect.objectContaining({ severity: "error", code: "spell-yaml" }));
   });
 
+  it("reports TargetedMultiSpell delays as non-blocking warnings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-spell-"));
+    const config = await projectFixture(root);
+    await writeFile(config.spellFile, `main:
+  spell-class: .MultiSpell
+  spells: [helper]
+helper:
+  spell-class: .buff.ArmorStandSpell
+  custom-name: test
+  duration: 2
+  cancel-on-logout: true
+  cancel-on-teleport: true
+targeted:
+  spell-class: .TargetedMultiSpell
+  spells: [DELAY 5, helper]
+`);
+    const result = await inspectSpellTimeline(config, "main");
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      severity: "warning",
+      code: "targeted-delay",
+      message: expect.stringContaining("non-conforming")
+    }));
+    expect(result.issues).not.toContainEqual(expect.objectContaining({ severity: "error", code: "targeted-delay" }));
+  });
+
+  it("reports when scheduling skips all helper invocations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-spell-"));
+    const config = await projectFixture(root);
+    await writeFile(config.spellFile, `main:
+  spell-class: .TargetedMultiSpell
+  spells: [helper]
+helper:
+  spell-class: .instant.FlySpell
+`);
+    const result = await inspectSpellTimeline(config, "main");
+    expect(result.occurrences).toEqual([]);
+    expect(result.issues).toContainEqual(expect.objectContaining({ severity: "error", code: "scheduling-skipped" }));
+  });
+
   it("preserves parameterized repeated helper occurrences during retiming", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "snowstorm-spell-"));
     const config = await projectFixture(root);

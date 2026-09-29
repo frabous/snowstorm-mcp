@@ -1,10 +1,10 @@
 import { chromium } from "playwright";
-import path from "node:path";
 import type { JsonObject, JsonValue, ProjectConfig } from "./types.js";
 import type { ParticleStore } from "./particle-store.js";
 import { valueAt } from "./particle-store.js";
 import { startSnowstormHost } from "./snowstorm-host.js";
 import { snowstormRoot } from "./config.js";
+import { projectRoot } from "./project-path.js";
 
 export interface MolangSample {
   age: number;
@@ -27,10 +27,6 @@ export interface ProbeAssertion {
   maxRatio?: number;
   minValue?: number;
   maxValue?: number;
-}
-
-function projectRoot(config: ProjectConfig): string {
-  return path.dirname(config.configPath);
 }
 
 function withTimeout<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
