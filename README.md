@@ -61,14 +61,14 @@ my-package/
 
 ## MCP Client Configuration
 
-The server uses local stdio and requires the absolute path to the built `dist/mcp.js` and to the selected project configuration. Replace the example paths below.
+The npm package provides a `snowstorm-mcp` executable for local stdio. After version `0.3.0` is published, clients can launch it with `npx --yes snowstorm-mcp@0.3.0`; set `SNOWSTORM_MCP_CONFIG` to the absolute path of the selected project configuration. For a source checkout, use `node <repository>/dist/mcp.js` instead.
 
 ### Claude Code
 
 Use user scope to make the server available across Claude Code projects, or choose a narrower scope if preferred:
 
 ```powershell
-claude mcp add --scope user --transport stdio --env "SNOWSTORM_MCP_CONFIG=C:\path\to\snowstorm-mcp\snowstorm-mcp.config.json" snowstorm-mcp -- node "C:\path\to\snowstorm-mcp\dist\mcp.js"
+claude mcp add --scope user --transport stdio --env "SNOWSTORM_MCP_CONFIG=C:\path\to\my-project\snowstorm-mcp.config.json" snowstorm-mcp -- npx --yes snowstorm-mcp@0.3.0
 claude mcp list
 ```
 
@@ -79,13 +79,13 @@ In a Claude Code session, run `/mcp` to inspect the connection and tools.
 Codex CLI, the Codex IDE extension and the ChatGPT desktop app share the Codex MCP configuration:
 
 ```powershell
-codex mcp add snowstorm-mcp --env "SNOWSTORM_MCP_CONFIG=C:\path\to\snowstorm-mcp\snowstorm-mcp.config.json" -- node "C:\path\to\snowstorm-mcp\dist\mcp.js"
+codex mcp add snowstorm-mcp --env "SNOWSTORM_MCP_CONFIG=C:\path\to\my-project\snowstorm-mcp.config.json" -- npx --yes snowstorm-mcp@0.3.0
 codex mcp list
 ```
 
 ### OpenCode
 
-Add this entry to OpenCode's `mcp` configuration after building. The same shape works in a project `opencode.json` or the user's global OpenCode configuration:
+Add this entry to OpenCode's `mcp` configuration. The same shape works in a project `opencode.json` or the user's global OpenCode configuration:
 
 ```json
 {
@@ -93,9 +93,9 @@ Add this entry to OpenCode's `mcp` configuration after building. The same shape 
   "mcp": {
     "snowstorm-mcp": {
       "type": "local",
-      "command": ["node", "C:\\path\\to\\snowstorm-mcp\\dist\\mcp.js"],
+      "command": ["npx", "--yes", "snowstorm-mcp@0.3.0"],
       "environment": {
-        "SNOWSTORM_MCP_CONFIG": "C:\\path\\to\\snowstorm-mcp\\snowstorm-mcp.config.json"
+        "SNOWSTORM_MCP_CONFIG": "C:\\path\\to\\my-project\\snowstorm-mcp.config.json"
       },
       "enabled": true,
       "timeout": 120000
@@ -113,7 +113,7 @@ Give the following prompt to Claude Code, Codex CLI, OpenCode or another compute
 ```text
 Set up this Snowstorm MCP installation on my machine.
 
-Repository path: <absolute path to snowstorm-mcp>
+Source checkout (if needed for a local fallback): <absolute path to snowstorm-mcp>
 Particle project(s): <absolute path(s) to my package(s), or ask me to identify them>
 Clients to configure: detect Claude Code, Codex CLI, OpenCode and other installed MCP clients; configure each one I approve.
 
@@ -123,10 +123,12 @@ Work through these steps and report what you did:
 3. Inspect `snowstorm-mcp.config.schema.json` and the package layout. Ask me for any missing or ambiguous particle, resource-pack, selector, instance-selector, spell or artifact paths. Never invent project paths. Keep secrets out of files, logs and chat.
 4. Create or update `snowstorm-mcp.config.json` only after showing me the proposed values. Use the legacy flat format for one project or the registry format for several projects. Keep every path valid. Use `../library/textures` as the default shared texture bank when that matches this repository layout; preserve an explicit `sharedTextureBanks` list or `[]` if I have one. Set `instanceSelectorsFile` only to the real instance selectors file.
 5. Run `npm install` only if dependencies are absent and I approve it, then run `npm run build` and `npm test`. Do not run any tool that writes particles, selectors, textures or other game assets during setup.
-6. For each approved client, merge one local stdio server entry without removing or rewriting unrelated settings. Launch `node <absolute-repository-path>/dist/mcp.js` and set `SNOWSTORM_MCP_CONFIG` to the absolute config path. Choose user/global or project/local scope only after checking the client's behavior and confirming my preference. Back up an existing client config before editing it.
+6. Check whether `snowstorm-mcp@0.3.0` is available on npm. If so, configure the local stdio command as `npx --yes snowstorm-mcp@0.3.0`; otherwise use `node <absolute-repository-path>/dist/mcp.js` from the existing checkout and tell me the npm release is not published yet. Set `SNOWSTORM_MCP_CONFIG` to the absolute config path. For each approved client, merge one server entry without removing or rewriting unrelated settings. Choose user/global or project/local scope only after checking the client's behavior and confirming my preference. Back up an existing client config before editing it.
 7. Start a fresh client session and use that client's documented MCP status/list command. Verify the server exposes its tools, call `project_list`, then run `particle_list` only if the selected project path is valid. Do not call a mutating tool as a connection test.
 8. Summarize configured clients and scopes, files changed, exact verification results, and any remaining issue. Leave private per-machine config files uncommitted.
 ```
+
+The npx-installed server includes Snowstorm for rendering. `particle_open_desktop` additionally requires Electron installed in the project checkout; use the source installation above for the Electron editor.
 
 ## Project Registry and Shared Texture Banks
 

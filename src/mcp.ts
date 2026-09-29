@@ -1,6 +1,9 @@
+#!/usr/bin/env node
+
 import { readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
@@ -111,7 +114,7 @@ export async function createMcpServer(configPath?: string): Promise<McpServer> {
   let store = new ParticleStore(config);
   let videos = new VideoAnalyzer(config);
   const server = new McpServer(
-    { name: "snowstorm-mcp", version: "0.2.0" },
+    { name: "snowstorm-mcp", version: "0.3.0" },
     {
       instructions: "Create and edit Minecraft Blockbuster 1.12 particle JSON safely. Inspect before editing. Do not remove blockbuster:* components unless explicitly requested. Rendered images prove Snowstorm's preview only, never Minecraft playback."
     }
@@ -602,7 +605,7 @@ export async function createMcpServer(configPath?: string): Promise<McpServer> {
 }
 
 const isEntryPoint = process.argv[1]
-  ? pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+  ? realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))
   : false;
 
 if (isEntryPoint) {
