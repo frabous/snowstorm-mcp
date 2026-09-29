@@ -12,7 +12,9 @@ Snowstorm is used for simulation only. The server preserves `blockbuster:*` exte
 - Validate particle, texture, selector and MagicSpells links as one package graph.
 - Inspect or retime a MagicSpells `.MultiSpell` without rewriting unrelated definitions.
 - Render deterministic single-particle or absolute-timeline scene previews as PNG, GIF or MP4.
-- Probe Molang values at explicit ages with numeric assertions.
+- Compose a scene with per-layer camera cuts, a solo layer, in-memory layer overrides and activity-derived sample times.
+- Probe Molang values at explicit ages with per-field, absolute-bound and cross-field assertions.
+- Inspect real particle PNGs side by side on a checkerboard with their declared dimensions.
 - Open a selected particle in a secure local Electron window.
 - Expose the built-in Blockbuster/Snowstorm authoring guide and effect design briefs to MCP clients.
 - Import source videos into an automatically managed folder, then analyze them with FFmpeg scene detection.
@@ -29,7 +31,7 @@ Snowstorm is used for simulation only. The server preserves `blockbuster:*` exte
 ## Installation
 
 ```powershell
-git clone --recurse-submodules https://github.com/YOUR_ACCOUNT/snowstorm-mcp.git
+git clone --recurse-submodules https://github.com/frabous/snowstorm-mcp.git
 Set-Location snowstorm-mcp
 npm install
 npx install-electron
@@ -40,6 +42,8 @@ npm test
 ```
 
 Edit `snowstorm-mcp.config.json` so its paths target your package. The provided local configuration is intentionally ignored by Git; it may point to a private Minecraft instance.
+
+Configuration is read once at startup. Repointing the file at another package does not rebind a running server, so every particle path reports the project it is still bound to and asks for a restart instead of failing with a bare `ENOENT`.
 
 Example layout:
 
@@ -96,6 +100,47 @@ Example projected query:
 ```
 
 `particle_render_scene` accepts explicit `{file, startSeconds, position}` layers or derives layers, absolute starts and static helper offsets from the configured MagicSpells graph. Camera coordinates accept finite numbers or numeric strings. Render windows are capped at 30 seconds, 750 frames and a 480-million rendered-pixel budget. The result includes compact lifecycle checks, a contact sheet, a report and an optional GIF/MP4.
+
+Snowstorm builds its particle material with depth writing enabled, and every quad of an emitter shares one unsorted buffer, so overlapping quads stencil each other with hard straight edges that do not occur in Minecraft. `depthWrite: false` is therefore the default, and `grid: false` hides the ground grid and origin axes, which exist only in the preview. Both settings are reported back in `caveats`. A straight contour that survives with `depthWrite: false` is the particle texture's own alpha, not a compositing artefact.
+
+`particle_patch` refuses to replace a numeric field with a bare numeric string such as `"9"`. Such a value is a valid Molang literal, so it cannot be caught by semantic validation, and MCP clients sometimes send numbers as strings. Fields that already hold a quoted number are still rendered correctly.
+
+`shots` cuts the camera across the window, so a sequence that needs one framing near the caster and another at 26 blocks no longer has to compromise on a single camera. `solo` renders one layer alone, which is how a composited artefact is attributed. A layer's `overrides` are applied in memory and are never written, so a throwaway diagnostic variant cannot end up in the delivery folder; the result names every overridden layer and says so in `caveats`. Omit `sampleTimes` and they are derived from each layer's own start, midpoint and tail, and `sampleTimesSource` reports which happened.
+
+## Texture Inspection
+
+`texture_contact_sheet` renders up to 16 real PNGs on a checkerboard with their dimensions, bytes and alpha flag. It is the only view that separates an artwork defect from a compositing artefact: a hard straight contour on a tile is the texture's own alpha, and it survives a scene render with `depthWrite` disabled.
+
+```json
+{
+  "textures": [
+    "b.a:particles/serious_punch/cloud_sheet",
+    "b.a:particles/serious_punch/tunnel_ring"
+  ]
+}
+```
+
+## Probing Claims
+
+`particle_probe` maps an alias to a JSON Pointer, and assertions reference the alias. A JSON pointer in `field` is rejected by name.
+
+```json
+{
+  "file": "serious_punch_tunnel_rings.particle.json",
+  "select": {
+    "size": "/particle_effect/components/minecraft:particle_appearance_billboard/size",
+    "alpha": "/particle_effect/components/minecraft:particle_appearance_tinting/color/3"
+  },
+  "samples": [{ "age": 0.2 }, { "age": 0.9 }, { "age": 1.6 }],
+  "assertions": [
+    { "field": "size", "sampleIndexes": [0, 1, 2], "metric": "length", "direction": "increasing" },
+    { "field": "size", "sampleIndexes": [0, 2], "metric": "length", "maxValue": 20 },
+    { "combine": { "op": "multiply", "fields": ["size", "alpha"] }, "sampleIndexes": [0, 1, 2], "metric": "value", "maxValue": 4 }
+  ]
+}
+```
+
+`minValue` and `maxValue` are absolute bounds, which is what a "must not swallow the camera" or "must not white out" invariant actually needs; `minRatio` and `maxRatio` remain relative to the first sample. `combine` reduces several fields into one series, so a cross-field invariant such as particle count times alpha needs no local checker.
 
 `particle_authoring_guide` embeds the Snowstorm/Blockbuster skill directly in the MCP. Request one of `workflow`, `components`, `blockbuster`, `motion`, `textures`, `magicspells`, `validation` or `reference-video` to minimize context; omit `topic` only when the AI needs the complete guide.
 
@@ -175,8 +220,9 @@ The `Save safely` control merges Snowstorm's output with the prior Blockbuster d
 | `particle_create` / `particle_patch` / `particle_patch_batch` | Safe single-file writes or preflighted batches with best-effort rollback. |
 | `particle_validate` / `particle_verify_package` | Semantic particle and complete package-graph checks. |
 | `spell_timeline_inspect` / `spell_retime` | Strict MagicSpells timeline reading and timing-only edits. |
-| `particle_probe` | Numeric Molang samples and generic assertions. |
-| `particle_render` / `particle_render_scene` | Single-particle or deterministic multi-layer previews. |
+| `particle_probe` | Numeric Molang samples with per-field, absolute-bound and cross-field assertions. |
+| `particle_render` / `particle_render_scene` | Single-particle or deterministic multi-layer previews, with camera cuts, solo layers and in-memory overrides. |
+| `texture_contact_sheet` | Real PNGs on a checkerboard with declared dimensions. |
 | `particle_open_desktop` | Electron editor. |
 | `particle_authoring_guide` / `particle_design_brief` | Embedded Snowstorm authoring knowledge. |
 | `video_import` | Copy a user-provided video into the automatic managed directory. |

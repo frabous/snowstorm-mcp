@@ -15,13 +15,18 @@ export interface MolangSample {
 }
 
 export interface ProbeAssertion {
-  field: string;
+  /** Alias declared in `select`. Mutually exclusive with `combine`. */
+  field?: string;
+  /** Reduces several selected fields into one scalar series, for invariants like "count x alpha stays under the whiteout threshold". */
+  combine?: { op: "multiply" | "divide" | "add" | "subtract" | "min" | "max"; fields: string[] };
   sampleIndexes: number[];
   metric: "value" | "length" | "distance";
   direction?: "increasing" | "decreasing";
   center?: number[];
   minRatio?: number;
   maxRatio?: number;
+  minValue?: number;
+  maxValue?: number;
 }
 
 function projectRoot(config: ProjectConfig): string {
@@ -55,6 +60,21 @@ function metric(value: JsonValue, assertion: ProbeAssertion): number {
   const center = assertion.center ?? new Array(numbers.length).fill(0);
   if (center.length !== numbers.length) throw new Error(`${assertion.field} assertion center has the wrong dimensions.`);
   return Math.hypot(...numbers.map((entry, index) => entry - center[index]!));
+}
+
+export function combine(op: NonNullable<ProbeAssertion["combine"]>["op"], values: number[]): number {
+  if (op === "divide" && values.length < 2) throw new Error("A divide assertion needs at least two fields.");
+  if (op !== "divide" && values.length < 1) throw new Error("A combined assertion needs at least one field.");
+  return values.reduce((total, value) => {
+    switch (op) {
+      case "multiply": return total * value;
+      case "divide": return total / value;
+      case "add": return total + value;
+      case "subtract": return total - value;
+      case "min": return Math.min(total, value);
+      case "max": return Math.max(total, value);
+    }
+  });
 }
 
 export async function probeParticle(
@@ -93,12 +113,6 @@ export async function probeParticle(
         samples: MolangSample[];
       };
       const emitter = (window as typeof window & { Emitter: any }).Emitter;
-      const evaluate = (value: unknown, variables: Record<string, number>): unknown => {
-        if (typeof value === "number") return value;
-        if (typeof value === "string") return emitter.Molang.parse(value, variables);
-        if (Array.isArray(value)) return value.map((entry) => evaluate(entry, variables));
-        return null;
-      };
       return samples.map((sample) => {
         const random = sample.random ?? [0.5, 0.5, 0.5, 0.5];
         const variables: Record<string, number> = {
@@ -112,22 +126,39 @@ export async function probeParticle(
           ...(sample.variables ?? {})
         };
         emitter.Molang.resetVariables();
-        return { input: sample, values: Object.fromEntries(Object.entries(fields).map(([label, value]) => [label, evaluate(value, variables)])) };
+        // No named function binding in this callback: it is serialised into the page, and
+        // a dev-runner transform that preserves names would reference a helper that only
+        // exists in the server bundle.
+        const values: Record<string, unknown> = {};
+        for (const [label, value] of Object.entries(fields)) {
+          if (typeof value === "number") values[label] = value;
+          else if (typeof value === "string") values[label] = emitter.Molang.parse(value, variables);
+          else if (Array.isArray(value)) values[label] = value.map((entry) => typeof entry === "number" ? entry : emitter.Molang.parse(entry, variables));
+          else values[label] = null;
+        }
+        return { input: sample, values };
       });
     }, JSON.stringify({ fields, samples: options.samples })), 10_000) as Array<{ input: MolangSample; values: Record<string, JsonValue> }>;
     const assertions = (options.assertions ?? []).map((assertion) => {
-      const values = assertion.sampleIndexes.map((index) => {
+      if (assertion.field === undefined && !assertion.combine) throw new Error("An assertion needs either field or combine.");
+      if (assertion.field !== undefined && assertion.combine) throw new Error("An assertion takes either field or combine, not both.");
+      const at = (index: number, name: string): number => {
         const row = rows[index];
         if (!row) throw new Error(`Assertion sample index ${index} is out of range.`);
-        const value = row.values[assertion.field] as JsonValue | undefined;
-        if (value === undefined) throw new Error(`Assertion references unknown field '${assertion.field}'.`);
+        const value = row.values[name] as JsonValue | undefined;
+        if (value === undefined) throw new Error(`Assertion references unknown field '${name}'. Declare it in select as an alias.`);
         return metric(value, assertion);
-      });
+      };
+      const values = assertion.sampleIndexes.map((index) => assertion.combine
+        ? combine(assertion.combine.op, assertion.combine.fields.map((name) => at(index, name)))
+        : at(index, assertion.field!));
       let passed = true;
       if (assertion.direction === "increasing") passed = values.every((value, index) => index === 0 || value > values[index - 1]!);
       if (assertion.direction === "decreasing") passed = values.every((value, index) => index === 0 || value < values[index - 1]!);
       if (assertion.minRatio !== undefined) passed = passed && values.at(-1)! / values[0]! >= assertion.minRatio;
       if (assertion.maxRatio !== undefined) passed = passed && values.at(-1)! / values[0]! <= assertion.maxRatio;
+      if (assertion.minValue !== undefined) passed = passed && values.every((value) => value >= assertion.minValue!);
+      if (assertion.maxValue !== undefined) passed = passed && values.every((value) => value <= assertion.maxValue!);
       return { ...assertion, values, passed };
     });
     return { valid: assertions.every((assertion) => assertion.passed), seed: options.seed ?? 1, fields: Object.keys(fields), samples: rows, assertions };
